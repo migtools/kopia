@@ -38,6 +38,8 @@ import (
 	"github.com/kopia/kopia/repo"
 	"github.com/kopia/kopia/repo/blob/filesystem"
 	bloblogging "github.com/kopia/kopia/repo/blob/logging"
+	"github.com/kopia/kopia/repo/compression"
+	"github.com/kopia/kopia/repo/content"
 	"github.com/kopia/kopia/repo/logging"
 	"github.com/kopia/kopia/repo/object"
 	"github.com/kopia/kopia/snapshot"
@@ -90,7 +92,7 @@ func newUploadTestHarness(ctx context.Context, t *testing.T) *uploadTestHarness 
 		panic("unable to connect to repository: " + conerr.Error())
 	}
 
-	ft := faketime.NewTimeAdvance(time.Date(2018, time.February, 6, 0, 0, 0, 0, time.UTC), 0)
+	ft := faketime.NewTimeAdvance(time.Date(2018, time.February, 6, 0, 0, 0, 0, time.UTC))
 
 	rep, err := repo.Open(ctx, configFile, masterPassword, &repo.Options{
 		TimeNowFunc: ft.NowFunc(),
@@ -228,6 +230,108 @@ func TestUpload(t *testing.T) {
 	}
 }
 
+type entry struct {
+	name     string
+	objectID object.ID
+}
+
+// findAllEntries recursively iterates over all the dirs and returns list of file entries.
+func findAllEntries(t *testing.T, ctx context.Context, dir fs.Directory) []entry {
+	t.Helper()
+	entries := []entry{}
+	fs.IterateEntries(ctx, dir, func(ctx context.Context, e fs.Entry) error {
+		oid, err := object.ParseID(e.(object.HasObjectID).ObjectID().String())
+		require.NoError(t, err)
+		entries = append(entries, entry{
+			name:     e.Name(),
+			objectID: oid,
+		})
+		if e.IsDir() {
+			entries = append(entries, findAllEntries(t, ctx, e.(fs.Directory))...)
+		}
+		return nil
+	})
+
+	return entries
+}
+
+func verifyMetadataCompressor(t *testing.T, ctx context.Context, rep repo.Repository, entries []entry, comp compression.HeaderID) {
+	t.Helper()
+	for _, e := range entries {
+		cid, _, ok := e.objectID.ContentID()
+		require.True(t, ok)
+		if !cid.HasPrefix() {
+			continue
+		}
+		info, err := rep.ContentInfo(ctx, cid)
+		if err != nil {
+			t.Errorf("failed to get content info: %v", err)
+		}
+		require.Equal(t, comp, info.CompressionHeaderID)
+	}
+}
+
+func TestUploadMetadataCompression(t *testing.T) {
+	ctx := testlogging.Context(t)
+	t.Run("default metadata compression", func(t *testing.T) {
+		th := newUploadTestHarness(ctx, t)
+		defer th.cleanup()
+		u := NewUploader(th.repo)
+		policyTree := policy.BuildTree(nil, policy.DefaultPolicy)
+
+		s1, err := u.Upload(ctx, th.sourceDir, policyTree, snapshot.SourceInfo{})
+		if err != nil {
+			t.Errorf("Upload error: %v", err)
+		}
+
+		dir := EntryFromDirEntry(th.repo, s1.RootEntry).(fs.Directory)
+		entries := findAllEntries(t, ctx, dir)
+		verifyMetadataCompressor(t, ctx, th.repo, entries, compression.HeaderZstdFastest)
+	})
+	t.Run("disable metadata compression", func(t *testing.T) {
+		th := newUploadTestHarness(ctx, t)
+		defer th.cleanup()
+		u := NewUploader(th.repo)
+		policyTree := policy.BuildTree(map[string]*policy.Policy{
+			".": {
+				MetadataCompressionPolicy: policy.MetadataCompressionPolicy{
+					CompressorName: "none",
+				},
+			},
+		}, policy.DefaultPolicy)
+
+		s1, err := u.Upload(ctx, th.sourceDir, policyTree, snapshot.SourceInfo{})
+		if err != nil {
+			t.Errorf("Upload error: %v", err)
+		}
+
+		dir := EntryFromDirEntry(th.repo, s1.RootEntry).(fs.Directory)
+		entries := findAllEntries(t, ctx, dir)
+		verifyMetadataCompressor(t, ctx, th.repo, entries, content.NoCompression)
+	})
+	t.Run("set metadata compressor", func(t *testing.T) {
+		th := newUploadTestHarness(ctx, t)
+		defer th.cleanup()
+		u := NewUploader(th.repo)
+		policyTree := policy.BuildTree(map[string]*policy.Policy{
+			".": {
+				MetadataCompressionPolicy: policy.MetadataCompressionPolicy{
+					CompressorName: "gzip",
+				},
+			},
+		}, policy.DefaultPolicy)
+
+		s1, err := u.Upload(ctx, th.sourceDir, policyTree, snapshot.SourceInfo{})
+		if err != nil {
+			t.Errorf("Upload error: %v", err)
+		}
+
+		dir := EntryFromDirEntry(th.repo, s1.RootEntry).(fs.Directory)
+		entries := findAllEntries(t, ctx, dir)
+		verifyMetadataCompressor(t, ctx, th.repo, entries, compression.ByName["gzip"].HeaderID())
+	})
+}
+
 func TestUpload_TopLevelDirectoryReadFailure(t *testing.T) {
 	ctx := testlogging.Context(t)
 	th := newUploadTestHarness(ctx, t)
@@ -357,8 +461,8 @@ func TestUpload_ErrorEntries(t *testing.T) {
 	defer th.cleanup()
 
 	th.sourceDir.Subdir("d1").AddErrorEntry("some-unknown-entry", os.ModeIrregular, fs.ErrUnknown)
-	th.sourceDir.Subdir("d1").AddErrorEntry("some-failed-entry", 0, errors.Errorf("some-other-error"))
-	th.sourceDir.Subdir("d2").AddErrorEntry("another-failed-entry", os.ModeIrregular, errors.Errorf("another-error"))
+	th.sourceDir.Subdir("d1").AddErrorEntry("some-failed-entry", 0, errors.New("some-other-error"))
+	th.sourceDir.Subdir("d2").AddErrorEntry("another-failed-entry", os.ModeIrregular, errors.New("another-error"))
 
 	trueValue := policy.OptionalBool(true)
 	falseValue := policy.OptionalBool(false)
@@ -424,7 +528,6 @@ func TestUpload_ErrorEntries(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.desc, func(t *testing.T) {
 			u := NewUploader(th.repo)
 
@@ -566,11 +669,11 @@ func TestUpload_FinishedFileProgress(t *testing.T) {
 			assert.Contains(t, []string{"f1", "f2"}, filepath.Base(relativePath))
 
 			if strings.Contains(relativePath, "f2") {
-				assert.Error(t, err)
+				require.Error(t, err)
 				return
 			}
 
-			assert.NoError(t, err)
+			require.NoError(t, err)
 		},
 	}
 
@@ -657,8 +760,6 @@ func TestUploadWithCheckpointing(t *testing.T) {
 	}
 
 	for _, d := range dirsToCheckpointAt {
-		d := d
-
 		d.OnReaddir(func() {
 			t.Logf("onReadDir %v %s", d.Name(), debug.Stack())
 			// trigger checkpoint
@@ -703,9 +804,9 @@ func TestParallelUploadUploadsBlobsInParallel(t *testing.T) {
 	// measure concurrency of PutBlob calls
 	th.faulty.AddFault(blobtesting.MethodPutBlob).Repeat(10).Before(func() {
 		v := currentParallelCalls.Add(1)
-		max := maxParallelCalls.Load()
-		if v > max {
-			maxParallelCalls.CompareAndSwap(max, v)
+		maxParallelism := maxParallelCalls.Load()
+		if v > maxParallelism {
+			maxParallelCalls.CompareAndSwap(maxParallelism, v)
 		}
 
 		time.Sleep(100 * time.Millisecond)
@@ -743,7 +844,7 @@ func TestParallelUploadUploadsBlobsInParallel(t *testing.T) {
 
 	require.NoError(t, th.repo.Flush(ctx))
 
-	require.Greater(t, maxParallelCalls.Load(), int32(0))
+	require.Positive(t, maxParallelCalls.Load())
 }
 
 func randomBytes(n int64) []byte {
@@ -751,71 +852,6 @@ func randomBytes(n int64) []byte {
 	rand.Read(b)
 
 	return b
-}
-
-func TestUploadScanStopsOnContextCancel(t *testing.T) {
-	ctx := testlogging.Context(t)
-	th := newUploadTestHarness(ctx, t)
-
-	defer th.cleanup()
-
-	u := NewUploader(th.repo)
-
-	scanctx, cancel := context.WithCancel(ctx)
-
-	th.sourceDir.Subdir("d1").Subdir("d2").OnReaddir(func() {
-		cancel()
-	})
-
-	result, err := u.scanDirectory(scanctx, th.sourceDir, nil)
-	if !errors.Is(err, scanctx.Err()) {
-		t.Fatalf("invalid scan error: %v", err)
-	}
-
-	if result.numFiles == 0 && result.totalFileSize == 0 {
-		t.Fatalf("should have returned partial results, got zeros")
-	}
-}
-
-func TestUploadScanIgnoresFiles(t *testing.T) {
-	ctx := testlogging.Context(t)
-	th := newUploadTestHarness(ctx, t)
-
-	defer th.cleanup()
-
-	u := NewUploader(th.repo)
-
-	// set up a policy tree where that ignores some files.
-	policyTree := policy.BuildTree(map[string]*policy.Policy{
-		".": {
-			FilesPolicy: policy.FilesPolicy{
-				IgnoreRules: []string{"f1"},
-			},
-		},
-	}, policy.DefaultPolicy)
-
-	// no policy
-	result1, err := u.scanDirectory(ctx, th.sourceDir, nil)
-	require.NoError(t, err)
-
-	result2, err := u.scanDirectory(ctx, th.sourceDir, policyTree)
-	require.NoError(t, err)
-
-	if result1.numFiles == 0 {
-		t.Fatalf("no files scanned")
-	}
-
-	if result2.numFiles == 0 {
-		t.Fatalf("no files scanned")
-	}
-
-	if got, want := result2.numFiles, result1.numFiles; got >= want {
-		t.Fatalf("expected lower number of files %v, wanted %v", got, want)
-	}
-
-	if got, want := result2.totalFileSize, result1.totalFileSize; got >= want {
-		t.Fatalf("expected lower file size %v, wanted %v", got, want)
-	}
 }
 
 func TestUpload_VirtualDirectoryWithStreamingFile(t *testing.T) {
@@ -831,14 +867,14 @@ func TestUpload_VirtualDirectoryWithStreamingFile(t *testing.T) {
 	policyTree := policy.BuildTree(nil, policy.DefaultPolicy)
 
 	// Create a temporary pipe file with test data
-	content := []byte("Streaming Temporary file content")
+	tmpContent := []byte("Streaming Temporary file content")
 
 	r, w, err := os.Pipe()
 	if err != nil {
 		t.Fatalf("error creating pipe file: %v", err)
 	}
 
-	if _, err = w.Write(content); err != nil {
+	if _, err = w.Write(tmpContent); err != nil {
 		t.Fatalf("error writing to pipe file: %v", err)
 	}
 
@@ -888,8 +924,8 @@ func TestUpload_VirtualDirectoryWithStreamingFile_WithCompression(t *testing.T) 
 
 	// Create a temporary file with test data. Want something compressible but
 	// small so we don't trigger dedupe.
-	content := []byte(strings.Repeat("a", 4096))
-	r := io.NopCloser(bytes.NewReader(content))
+	tmpContent := []byte(strings.Repeat("a", 4096))
+	r := io.NopCloser(bytes.NewReader(tmpContent))
 
 	staticRoot := virtualfs.NewStaticDirectory("rootdir", []fs.Entry{
 		virtualfs.StreamingFileFromReader("stream-file", r),
@@ -910,7 +946,7 @@ func TestUpload_VirtualDirectoryWithStreamingFile_WithCompression(t *testing.T) 
 }
 
 func TestUpload_VirtualDirectoryWithStreamingFileWithModTime(t *testing.T) {
-	content := []byte("Streaming Temporary file content")
+	tmpContent := []byte("Streaming Temporary file content")
 	mt := time.Date(2021, 1, 2, 3, 4, 5, 0, time.UTC)
 
 	cases := []struct {
@@ -922,7 +958,7 @@ func TestUpload_VirtualDirectoryWithStreamingFileWithModTime(t *testing.T) {
 		{
 			desc: "CurrentTime",
 			getFile: func() fs.StreamingFile {
-				return virtualfs.StreamingFileFromReader("a", io.NopCloser(bytes.NewReader(content)))
+				return virtualfs.StreamingFileFromReader("a", io.NopCloser(bytes.NewReader(tmpContent)))
 			},
 			cachedFiles:   0,
 			uploadedFiles: 1,
@@ -930,7 +966,7 @@ func TestUpload_VirtualDirectoryWithStreamingFileWithModTime(t *testing.T) {
 		{
 			desc: "FixedTime",
 			getFile: func() fs.StreamingFile {
-				return virtualfs.StreamingFileWithModTimeFromReader("a", mt, io.NopCloser(bytes.NewReader(content)))
+				return virtualfs.StreamingFileWithModTimeFromReader("a", mt, io.NopCloser(bytes.NewReader(tmpContent)))
 			},
 			cachedFiles:   1,
 			uploadedFiles: 0,
@@ -959,7 +995,7 @@ func TestUpload_VirtualDirectoryWithStreamingFileWithModTime(t *testing.T) {
 			require.Equal(t, int32(1), atomic.LoadInt32(&man1.Stats.NonCachedFiles))
 			require.Equal(t, int32(1), atomic.LoadInt32(&man1.Stats.TotalDirectoryCount))
 			require.Equal(t, int32(1), atomic.LoadInt32(&man1.Stats.TotalFileCount))
-			require.Equal(t, int64(len(content)), atomic.LoadInt64(&man1.Stats.TotalFileSize))
+			require.Equal(t, int64(len(tmpContent)), atomic.LoadInt64(&man1.Stats.TotalFileSize))
 
 			// wait a little bit to ensure clock moves forward which is not always the case on Windows.
 			time.Sleep(100 * time.Millisecond)
@@ -978,7 +1014,7 @@ func TestUpload_VirtualDirectoryWithStreamingFileWithModTime(t *testing.T) {
 			assert.Equal(t, tc.uploadedFiles, atomic.LoadInt32(&man2.Stats.NonCachedFiles))
 			// Cached files don't count towards the total file count.
 			assert.Equal(t, tc.uploadedFiles, atomic.LoadInt32(&man2.Stats.TotalFileCount))
-			require.Equal(t, int64(len(content)), atomic.LoadInt64(&man2.Stats.TotalFileSize))
+			require.Equal(t, int64(len(tmpContent)), atomic.LoadInt64(&man2.Stats.TotalFileSize))
 		})
 	}
 }
@@ -1002,25 +1038,17 @@ func TestUpload_StreamingDirectory(t *testing.T) {
 	staticRoot := virtualfs.NewStaticDirectory("rootdir", []fs.Entry{
 		virtualfs.NewStreamingDirectory(
 			"stream-directory",
-			func(innerCtx context.Context, callback func(context.Context, fs.Entry) error) error {
-				for _, f := range files {
-					if err := callback(innerCtx, f); err != nil {
-						return err
-					}
-				}
-
-				return nil
-			},
+			fs.StaticIterator(files, nil),
 		),
 	})
 
 	man, err := u.Upload(ctx, staticRoot, policyTree, snapshot.SourceInfo{})
 	require.NoError(t, err)
 
-	assert.Equal(t, atomic.LoadInt32(&man.Stats.CachedFiles), int32(0))
-	assert.Equal(t, atomic.LoadInt32(&man.Stats.NonCachedFiles), int32(1))
-	assert.Equal(t, atomic.LoadInt32(&man.Stats.TotalDirectoryCount), int32(2))
-	assert.Equal(t, atomic.LoadInt32(&man.Stats.TotalFileCount), int32(1))
+	assert.Equal(t, int32(0), atomic.LoadInt32(&man.Stats.CachedFiles))
+	assert.Equal(t, int32(1), atomic.LoadInt32(&man.Stats.NonCachedFiles))
+	assert.Equal(t, int32(2), atomic.LoadInt32(&man.Stats.TotalDirectoryCount))
+	assert.Equal(t, int32(1), atomic.LoadInt32(&man.Stats.TotalFileCount))
 }
 
 func TestUpload_StreamingDirectoryWithIgnoredFile(t *testing.T) {
@@ -1049,25 +1077,17 @@ func TestUpload_StreamingDirectoryWithIgnoredFile(t *testing.T) {
 	staticRoot := virtualfs.NewStaticDirectory("rootdir", []fs.Entry{
 		virtualfs.NewStreamingDirectory(
 			"stream-directory",
-			func(innerCtx context.Context, callback func(context.Context, fs.Entry) error) error {
-				for _, f := range files {
-					if err := callback(innerCtx, f); err != nil {
-						return err
-					}
-				}
-
-				return nil
-			},
+			fs.StaticIterator(files, nil),
 		),
 	})
 
 	man, err := u.Upload(ctx, staticRoot, policyTree, snapshot.SourceInfo{})
 	require.NoError(t, err)
 
-	assert.Equal(t, atomic.LoadInt32(&man.Stats.CachedFiles), int32(0))
-	assert.Equal(t, atomic.LoadInt32(&man.Stats.NonCachedFiles), int32(1))
-	assert.Equal(t, atomic.LoadInt32(&man.Stats.TotalDirectoryCount), int32(2))
-	assert.Equal(t, atomic.LoadInt32(&man.Stats.TotalFileCount), int32(1))
+	assert.Equal(t, int32(0), atomic.LoadInt32(&man.Stats.CachedFiles))
+	assert.Equal(t, int32(1), atomic.LoadInt32(&man.Stats.NonCachedFiles))
+	assert.Equal(t, int32(2), atomic.LoadInt32(&man.Stats.TotalDirectoryCount))
+	assert.Equal(t, int32(1), atomic.LoadInt32(&man.Stats.TotalFileCount))
 }
 
 type mockLogger struct {
@@ -1130,14 +1150,14 @@ func TestParallelUploadDedup(t *testing.T) {
 	// 10 identical non-compressible files, 50MB each
 	var files []*os.File
 
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		f, cerr := os.Create(filepath.Join(td, fmt.Sprintf("file-%v", i)))
 		require.NoError(t, cerr)
 
 		files = append(files, f)
 	}
 
-	for j := 0; j < 1000; j++ {
+	for range 1000 {
 		buf := make([]byte, 50000)
 		rand.Read(buf)
 
@@ -1191,14 +1211,14 @@ func TestParallelUploadOfLargeFiles(t *testing.T) {
 	// Write 2 x 50MB files
 	var files []*os.File
 
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		f, cerr := os.Create(filepath.Join(td, fmt.Sprintf("file-%v", i)))
 		require.NoError(t, cerr)
 
 		files = append(files, f)
 	}
 
-	for j := 0; j < 1000; j++ {
+	for range 1000 {
 		buf := make([]byte, 50000)
 
 		for _, f := range files {
@@ -1225,7 +1245,7 @@ func TestParallelUploadOfLargeFiles(t *testing.T) {
 
 	successCount := 0
 
-	dir.IterateEntries(ctx, func(ctx context.Context, e fs.Entry) error {
+	fs.IterateEntries(ctx, dir, func(ctx context.Context, e fs.Entry) error {
 		if f, ok := e.(fs.File); ok {
 			oid, err := object.ParseID(strings.TrimPrefix(f.(object.HasObjectID).ObjectID().String(), "I"))
 			require.NoError(t, err)
@@ -1248,7 +1268,7 @@ func TestParallelUploadOfLargeFiles(t *testing.T) {
 	})
 
 	// make sure we actually tested something
-	require.Greater(t, successCount, 0)
+	require.Positive(t, successCount)
 }
 
 func verifyFileContent(t *testing.T, f1Entry fs.File, f2Name string) {
@@ -1599,6 +1619,7 @@ func TestUploadLogging(t *testing.T) {
 			u.ParallelUploads = 1
 
 			pol := *policy.DefaultPolicy
+			pol.OSSnapshotPolicy.VolumeShadowCopy.Enable = policy.NewOSSnapshotMode(policy.OSSnapshotNever)
 			if p := tc.globalLoggingPolicy; p != nil {
 				pol.LoggingPolicy = *p
 			}

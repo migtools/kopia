@@ -11,9 +11,9 @@ import (
 	"github.com/kopia/kopia/fs"
 	"github.com/kopia/kopia/fs/localfs"
 	"github.com/kopia/kopia/internal/clock"
-	"github.com/kopia/kopia/internal/ctxutil"
 	"github.com/kopia/kopia/internal/serverapi"
 	"github.com/kopia/kopia/internal/uitask"
+	"github.com/kopia/kopia/notification/notifydata"
 	"github.com/kopia/kopia/repo"
 	"github.com/kopia/kopia/snapshot"
 	"github.com/kopia/kopia/snapshot/policy"
@@ -27,7 +27,7 @@ const (
 )
 
 type sourceManagerServerInterface interface {
-	runSnapshotTask(ctx context.Context, src snapshot.SourceInfo, inner func(ctx context.Context, ctrl uitask.Controller) error) error
+	runSnapshotTask(ctx context.Context, src snapshot.SourceInfo, inner func(ctx context.Context, ctrl uitask.Controller, result *notifydata.ManifestWithError) error) error
 	refreshScheduler(reason string)
 }
 
@@ -71,9 +71,10 @@ type sourceManager struct {
 	currentTask string
 	// +checklocks:sourceMutex
 	lastAttemptedSnapshotTime fs.UTCTimestamp
-
+	// +checklocks:sourceMutex
 	isReadOnly bool
-	progress   *snapshotfs.CountingUploadProgress
+
+	progress *snapshotfs.CountingUploadProgress
 }
 
 func (s *sourceManager) Status() *serverapi.SourceStatus {
@@ -159,7 +160,7 @@ func (s *sourceManager) start(ctx context.Context, isLocal bool) {
 
 func (s *sourceManager) run(ctx context.Context, isLocal bool) {
 	// make sure we run in a detached context, which ignores outside cancellation and deadline.
-	ctx = ctxutil.Detach(ctx)
+	ctx = context.WithoutCancel(ctx)
 
 	s.setStatus("INITIALIZING")
 	defer s.setStatus("STOPPED")
@@ -218,8 +219,17 @@ func (s *sourceManager) backoffBeforeNextSnapshot() {
 	s.setNextSnapshotTime(clock.Now().Add(failedSnapshotRetryInterval))
 }
 
+func (s *sourceManager) isRunningReadOnly() bool {
+	s.sourceMutex.RLock()
+	defer s.sourceMutex.RUnlock()
+
+	return s.isReadOnly
+}
+
 func (s *sourceManager) runReadOnly() {
+	s.sourceMutex.Lock()
 	s.isReadOnly = true
+	s.sourceMutex.Unlock()
 	s.setStatus("REMOTE")
 
 	// wait until closed
@@ -250,7 +260,7 @@ func (s *sourceManager) cancel(ctx context.Context) serverapi.SourceActionRespon
 	log(ctx).Debugw("cancel triggered via API", "source", s.src)
 
 	if u := s.currentUploader(); u != nil {
-		log(ctx).Infof("canceling current upload")
+		log(ctx).Info("canceling current upload")
 		u.Cancel()
 	}
 
@@ -265,7 +275,7 @@ func (s *sourceManager) pause(ctx context.Context) serverapi.SourceActionRespons
 	s.sourceMutex.Unlock()
 
 	if u := s.currentUploader(); u != nil {
-		log(ctx).Infof("canceling current upload")
+		log(ctx).Info("canceling current upload")
 		u.Cancel()
 	}
 
@@ -299,7 +309,7 @@ func (s *sourceManager) waitUntilStopped() {
 	s.wg.Wait()
 }
 
-func (s *sourceManager) snapshotInternal(ctx context.Context, ctrl uitask.Controller) error {
+func (s *sourceManager) snapshotInternal(ctx context.Context, ctrl uitask.Controller, result *notifydata.ManifestWithError) error {
 	s.setStatus("UPLOADING")
 
 	s.setCurrentTaskID(ctrl.CurrentTaskID())
@@ -326,6 +336,10 @@ func (s *sourceManager) snapshotInternal(ctx context.Context, ctrl uitask.Contro
 	s.lastAttemptedSnapshotTime = fs.UTCTimestampFromTime(clock.Now())
 	s.sourceMutex.Unlock()
 
+	if len(manifestsSinceLastCompleteSnapshot) > 0 {
+		result.Previous = manifestsSinceLastCompleteSnapshot[0]
+	}
+
 	//nolint:wrapcheck
 	return repo.WriteSession(ctx, s.rep, repo.WriteSessionOptions{
 		Purpose: "Source Manager Uploader",
@@ -336,6 +350,7 @@ func (s *sourceManager) snapshotInternal(ctx context.Context, ctrl uitask.Contro
 		},
 	}, func(ctx context.Context, w repo.RepositoryWriter) error {
 		log(ctx).Debugf("uploading %v", s.src)
+
 		u := snapshotfs.NewUploader(w)
 
 		ctrl.OnCancel(u.Cancel)
@@ -359,18 +374,20 @@ func (s *sourceManager) snapshotInternal(ctx context.Context, ctrl uitask.Contro
 		s.setUploader(u)
 
 		manifest, err := u.Upload(ctx, localEntry, policyTree, s.src, manifestsSinceLastCompleteSnapshot...)
-		prog.report(true)
 
+		prog.report(true)
 		s.setUploader(nil)
 
 		if err != nil {
 			return errors.Wrap(err, "upload error")
 		}
 
+		result.Manifest = *manifest
+
 		ignoreIdenticalSnapshot := policyTree.EffectivePolicy().RetentionPolicy.IgnoreIdenticalSnapshots.OrDefault(false)
 		if ignoreIdenticalSnapshot && len(manifestsSinceLastCompleteSnapshot) > 0 {
 			if manifestsSinceLastCompleteSnapshot[0].RootObjectID() == manifest.RootObjectID() {
-				log(ctx).Debugf("Not saving snapshot because no files have been changed since previous snapshot")
+				log(ctx).Debug("Not saving snapshot because no files have been changed since previous snapshot")
 				return nil
 			}
 		}
@@ -385,6 +402,7 @@ func (s *sourceManager) snapshotInternal(ctx context.Context, ctrl uitask.Contro
 		}
 
 		log(ctx).Debugf("created snapshot %v", snapshotID)
+
 		return nil
 	})
 }
@@ -476,6 +494,11 @@ func (t *uitaskProgress) maybeReport() {
 	}
 }
 
+// Enabled implements UploadProgress, always returns true.
+func (t *uitaskProgress) Enabled() bool {
+	return true
+}
+
 // UploadStarted is emitted once at the start of an upload.
 func (t *uitaskProgress) UploadStarted() {
 	t.p.UploadStarted()
@@ -557,9 +580,14 @@ func (t *uitaskProgress) ExcludedDir(dirname string) {
 }
 
 // EstimatedDataSize is emitted whenever the size of upload is estimated.
-func (t *uitaskProgress) EstimatedDataSize(fileCount int, totalBytes int64) {
+func (t *uitaskProgress) EstimatedDataSize(fileCount, totalBytes int64) {
 	t.p.EstimatedDataSize(fileCount, totalBytes)
 	t.maybeReport()
+}
+
+// EstimationParameters returns parameters to be used for estimation.
+func (t *uitaskProgress) EstimationParameters() snapshotfs.EstimationParameters {
+	return t.p.EstimationParameters()
 }
 
 func newSourceManager(src snapshot.SourceInfo, server *Server, rep repo.Repository) *sourceManager {
