@@ -1,6 +1,8 @@
 module github.com/kopia/kopia
 
-go 1.21
+go 1.23.0
+
+toolchain go1.23.6
 
 require (
 	cloud.google.com/go/storage v1.32.0
@@ -55,15 +57,15 @@ require (
 	go.opentelemetry.io/otel/trace v1.17.0
 	go.uber.org/multierr v1.11.0
 	go.uber.org/zap v1.25.0
-	golang.org/x/crypto v0.12.0
+	golang.org/x/crypto v0.35.0
 	golang.org/x/exp v0.0.0-20230522175609-2e198f4a06a1
-	golang.org/x/mod v0.12.0
-	golang.org/x/net v0.14.0
-	golang.org/x/oauth2 v0.11.0
-	golang.org/x/sync v0.3.0
-	golang.org/x/sys v0.12.0
-	golang.org/x/term v0.12.0
-	golang.org/x/text v0.13.0
+	golang.org/x/mod v0.17.0
+	golang.org/x/net v0.36.0
+	golang.org/x/oauth2 v0.27.0
+	golang.org/x/sync v0.11.0
+	golang.org/x/sys v0.30.0
+	golang.org/x/term v0.29.0
+	golang.org/x/text v0.22.0
 	google.golang.org/api v0.138.0
 	google.golang.org/grpc v1.57.0
 	google.golang.org/protobuf v1.31.0
@@ -72,8 +74,7 @@ require (
 
 require (
 	cloud.google.com/go v0.110.6 // indirect
-	cloud.google.com/go/compute v1.23.0 // indirect
-	cloud.google.com/go/compute/metadata v0.2.3 // indirect
+	cloud.google.com/go/compute/metadata v0.3.0 // indirect
 	cloud.google.com/go/iam v1.1.1 // indirect
 	github.com/Azure/azure-pipeline-go v0.2.3 // indirect
 	github.com/Azure/azure-sdk-for-go/sdk/internal v1.3.0 // indirect
