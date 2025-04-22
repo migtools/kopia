@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
@@ -66,7 +67,7 @@ func (hc *actionContext) ensureInitialized(ctx context.Context, actionType, dirP
 		return errors.Wrap(err, "error reading random bytes")
 	}
 
-	hc.SnapshotID = fmt.Sprintf("%x", randBytes[:])
+	hc.SnapshotID = hex.EncodeToString(randBytes[:])
 	hc.SourcePath = dirPathOrEmpty
 	hc.SnapshotPath = hc.SourcePath
 
@@ -126,7 +127,7 @@ func prepareCommandForAction(ctx context.Context, actionType string, h *policy.A
 	default:
 		cancel()
 
-		return nil, nil, errors.Errorf("action did not provide either script nor command to run")
+		return nil, nil, errors.New("action did not provide either script nor command to run")
 	}
 
 	// all actions run inside temporary working directory
@@ -177,7 +178,7 @@ func runActionCommand(
 func parseCaptures(v []byte, captures map[string]string) error {
 	s := bufio.NewScanner(bytes.NewReader(v))
 	for s.Scan() {
-		//nolint:gomnd
+		//nolint:mnd
 		l := strings.SplitN(s.Text(), "=", 2)
 		if len(l) <= 1 {
 			continue
