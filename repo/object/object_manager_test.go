@@ -37,7 +37,7 @@ type fakeContentManager struct {
 	// +checklocks:mu
 	data map[content.ID][]byte
 	// +checklocks:mu
-	compresionIDs map[content.ID]compression.HeaderID
+	compressionIDs map[content.ID]compression.HeaderID
 
 	supportsContentCompression bool
 	writeContentError          error
@@ -72,8 +72,8 @@ func (f *fakeContentManager) WriteContent(ctx context.Context, data gather.Bytes
 	defer f.mu.Unlock()
 
 	f.data[contentID] = data.ToByteSlice()
-	if f.compresionIDs != nil {
-		f.compresionIDs[contentID] = comp
+	if f.compressionIDs != nil {
+		f.compressionIDs[contentID] = comp
 	}
 
 	return contentID, nil
@@ -88,7 +88,7 @@ func (f *fakeContentManager) ContentInfo(ctx context.Context, contentID content.
 	defer f.mu.Unlock()
 
 	if d, ok := f.data[contentID]; ok {
-		return content.Info{ContentID: contentID, PackedLength: uint32(len(d)), CompressionHeaderID: f.compresionIDs[contentID]}, nil
+		return content.Info{ContentID: contentID, PackedLength: uint32(len(d)), CompressionHeaderID: f.compressionIDs[contentID]}, nil
 	}
 
 	return content.Info{}, blob.ErrBlobNotFound
@@ -106,7 +106,7 @@ func setupTest(t *testing.T, compressionHeaderID map[content.ID]compression.Head
 	fcm := &fakeContentManager{
 		data:                       data,
 		supportsContentCompression: compressionHeaderID != nil,
-		compresionIDs:              compressionHeaderID,
+		compressionIDs:             compressionHeaderID,
 	}
 
 	r, err := NewObjectManager(testlogging.Context(t), fcm, format.ObjectFormat{
@@ -444,10 +444,12 @@ func verifyIndirectBlock(ctx context.Context, t *testing.T, om *Manager, oid ID,
 				if !c.HasPrefix() {
 					t.Errorf("expected base content ID to be prefixed, was %v", c)
 				}
+
 				info, err := om.contentMgr.ContentInfo(ctx, c)
 				if err != nil {
 					t.Errorf("error getting content info for %v", err.Error())
 				}
+
 				require.Equal(t, expectedComp, info.CompressionHeaderID)
 			}
 
@@ -496,7 +498,7 @@ func TestIndirection(t *testing.T) {
 		contentBytes := make([]byte, c.dataLength)
 
 		writer := om.NewWriter(ctx, WriterOptions{MetadataCompressor: c.metadataCompressor})
-		writer.(*objectWriter).splitter = splitterFactory()
+		testutil.EnsureType[*objectWriter](t, writer).splitter = splitterFactory()
 
 		if _, err := writer.Write(contentBytes); err != nil {
 			t.Errorf("write error: %v", err)
@@ -530,6 +532,7 @@ func TestIndirection(t *testing.T) {
 		if len(c.metadataCompressor) > 0 && c.metadataCompressor != "none" {
 			expectedCompressor = compression.ByName[c.metadataCompressor].HeaderID()
 		}
+
 		verifyIndirectBlock(ctx, t, om, result, expectedCompressor)
 	}
 }

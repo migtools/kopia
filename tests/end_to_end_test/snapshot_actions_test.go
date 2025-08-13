@@ -265,7 +265,7 @@ func TestSnapshotActionsEmbeddedScript(t *testing.T) {
 		badRedirectScript  = tmpfileWithContents(t, "echo KOPIA_SNAPSHOT_PATH=/no/such/directory")
 	)
 
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == windowsOSName {
 		failingScript = tmpfileWithContents(t, "exit /b 1")
 		successScript2 = tmpfileWithContents(t, "echo Hello world!")
 	} else {
@@ -339,6 +339,7 @@ func TestSnapshotActionsEnable(t *testing.T) {
 			e.RunAndExpectSuccess(t, append([]string{"snapshot", "create", sharedTestDataDir1}, tc.snapshotFlags...)...)
 
 			_, err := os.Stat(envFile)
+
 			didRun := err == nil
 			if didRun != tc.wantRun {
 				t.Errorf("unexpected behavior. did run: %v want run: %v", didRun, tc.wantRun)

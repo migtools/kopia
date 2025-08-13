@@ -19,6 +19,7 @@ import (
 	"go.uber.org/zap/zapcore"
 
 	"github.com/kopia/kopia/cli"
+	"github.com/kopia/kopia/internal/cachedir"
 	"github.com/kopia/kopia/internal/clock"
 	"github.com/kopia/kopia/internal/ospath"
 	"github.com/kopia/kopia/internal/zaplogutil"
@@ -51,6 +52,7 @@ type loggingFlags struct {
 	disableColor                bool
 	consoleLogTimestamps        bool
 	waitForLogSweep             bool
+	disableFileLogging          bool
 
 	cliApp *cli.App
 }
@@ -58,6 +60,7 @@ type loggingFlags struct {
 func (c *loggingFlags) setup(cliApp *cli.App, app *kingpin.Application) {
 	app.Flag("log-file", "Override log file.").StringVar(&c.logFile)
 	app.Flag("content-log-file", "Override content log file.").Hidden().StringVar(&c.contentLogFile)
+	app.Flag("disable-file-logging", "Disable file-based logging.").BoolVar(&c.disableFileLogging)
 
 	app.Flag("log-dir", "Directory where log files should be written.").Envar(cliApp.EnvName("KOPIA_LOG_DIR")).Default(ospath.LogsDir()).StringVar(&c.logDir)
 	app.Flag("log-dir-max-files", "Maximum number of log files to retain").Envar(cliApp.EnvName("KOPIA_LOG_DIR_MAX_FILES")).Default("1000").Hidden().IntVar(&c.logDirMaxFiles)
@@ -112,12 +115,21 @@ func (c *loggingFlags) initialize(ctx *kingpin.ParseContext) error {
 		suffix = strings.ReplaceAll(c.FullCommand(), " ", "-")
 	}
 
-	rootLogger := zap.New(zapcore.NewTee(
-		c.setupConsoleCore(),
-		c.setupLogFileCore(now, suffix),
-	), zap.WithClock(zaplogutil.Clock()))
+	rootCores := []zapcore.Core{c.setupConsoleCore()}
+	if !c.disableFileLogging {
+		rootCores = append(rootCores, c.setupLogFileCore(now, suffix))
+	}
 
-	contentLogger := zap.New(c.setupContentLogFileBackend(now, suffix), zap.WithClock(zaplogutil.Clock())).Sugar()
+	rootLogger := zap.New(zapcore.NewTee(rootCores...), zap.WithClock(zaplogutil.Clock()))
+
+	var contentCore zapcore.Core
+	if c.disableFileLogging {
+		contentCore = c.setupConsoleCore()
+	} else {
+		contentCore = c.setupContentLogFileBackend(now, suffix)
+	}
+
+	contentLogger := zap.New(contentCore, zap.WithClock(zaplogutil.Clock())).Sugar()
 
 	c.cliApp.SetLoggerFactory(func(module string) logging.Logger {
 		if module == content.FormatLogModule {
@@ -211,6 +223,10 @@ func (c *loggingFlags) setupLogFileBasedLogger(now time.Time, subdir, suffix, lo
 
 	if err := os.MkdirAll(logDir, logsDirMode); err != nil {
 		fmt.Fprintln(os.Stderr, "Unable to create logs directory:", err)
+	}
+
+	if err := cachedir.WriteCacheMarker(logDir); err != nil {
+		fmt.Fprintf(os.Stderr, "Unable to create cache marker in log directory %q: %s", logDir, err)
 	}
 
 	sweepLogWG := &sync.WaitGroup{}

@@ -58,7 +58,7 @@ func SortAndDedupeTimesOfDay(tod []TimeOfDay) []TimeOfDay {
 	})
 
 	// Remove subsequent duplicates
-	return slices.Compact[[]TimeOfDay, TimeOfDay](tod)
+	return slices.Compact(tod)
 }
 
 // SchedulingPolicy describes policy for scheduling snapshots.
@@ -204,7 +204,7 @@ func (p *SchedulingPolicy) checkMissedSnapshot(now, previousSnapshotTime, nextSn
 	}
 
 	nextSnapshot := nextSnapshotTime
-	// We add a second to ensure that the next possible snapshot is > the last snaphot
+	// We add a second to ensure that the next possible snapshot is > the last snapshot
 	todSnapshot, todOk := p.getNextTimeOfDaySnapshot(momentAfterSnapshot)
 	cronSnapshot, cronOk := p.getNextCronSnapshot(momentAfterSnapshot)
 

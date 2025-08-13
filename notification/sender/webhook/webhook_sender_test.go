@@ -21,10 +21,12 @@ func TestWebhook(t *testing.T) {
 	mux := http.NewServeMux()
 
 	var requests []*http.Request
+
 	var requestBodies []bytes.Buffer
 
 	mux.HandleFunc("/some-path", func(w http.ResponseWriter, r *http.Request) {
 		var b bytes.Buffer
+
 		io.Copy(&b, r.Body)
 
 		requestBodies = append(requestBodies, b)
@@ -87,7 +89,7 @@ func TestWebhook(t *testing.T) {
 	require.Equal(t, "This is a test.\n\n* one\n* two\n* three", requestBodies[1].String())
 
 	p3, err := sender.GetSender(ctx, "my-profile", "webhook", &webhook.Options{
-		Endpoint: server.URL + "/nonexixtent-path",
+		Endpoint: server.URL + "/nonexistent-path",
 	})
 	require.NoError(t, err)
 

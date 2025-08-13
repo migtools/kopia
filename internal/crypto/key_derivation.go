@@ -1,24 +1,23 @@
 package crypto
 
 import (
+	"crypto/hkdf"
 	"crypto/sha256"
-	"io"
 
-	"golang.org/x/crypto/hkdf"
+	"github.com/pkg/errors"
 )
 
+var errInvalidMasterKey = errors.New("invalid primary key")
+
 // DeriveKeyFromMasterKey computes a key for a specific purpose and length using HKDF based on the master key.
-func DeriveKeyFromMasterKey(masterKey, salt, purpose []byte, length int) []byte {
+func DeriveKeyFromMasterKey(masterKey, salt, purpose []byte, length int) (derivedKey []byte, err error) {
 	if len(masterKey) == 0 {
-		panic("invalid master key")
+		return nil, errors.Wrap(errInvalidMasterKey, "empty key")
 	}
 
-	key := make([]byte, length)
-	k := hkdf.New(sha256.New, masterKey, salt, purpose)
-
-	if _, err := io.ReadFull(k, key); err != nil {
-		panic("unable to derive key from master key, this should never happen")
+	if derivedKey, err = hkdf.Key(sha256.New, masterKey, salt, string(purpose), length); err != nil {
+		return nil, errors.Wrap(err, "unable to derive key")
 	}
 
-	return key
+	return derivedKey, nil
 }
