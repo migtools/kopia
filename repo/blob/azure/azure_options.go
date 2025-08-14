@@ -15,18 +15,24 @@ type Options struct {
 	Prefix string `json:"prefix,omitempty"`
 
 	// Storage account name
-	StorageAccount string `json:"storageAccount"`
+	StorageAccount string `json:"storageAccount,omitempty"`
 
 	// Storage account access key
-	StorageKey string `json:"storageKey"     kopia:"sensitive"`
+	StorageKey string `json:"storageKey,omitempty" kopia:"sensitive"`
 
 	// Alternatively provide SAS Token
-	SASToken string `json:"sasToken" kopia:"sensitive"`
+	SASToken string `json:"sasToken,omitempty" kopia:"sensitive"`
 
 	// the tenant-ID/client-ID/client-Secret of the service principal
-	TenantID     string
-	ClientID     string
-	ClientSecret string
+	TenantID     string `json:",omitempty"`
+	ClientID     string `json:",omitempty"`
+	ClientSecret string `json:",omitempty" kopia:"sensitive"`
+
+	// ClientCertificate are used for creating ClientCertificateCredentials
+	ClientCertificate string `json:"clientCertificate,omitempty" kopia:"sensitive"`
+
+	// AzureFederatedTokenFile is the path to a file containing an Azure Federated Token.
+	AzureFederatedTokenFile string `json:"azureFederatedTokenFile,omitempty"`
 
 	StorageDomain string `json:"storageDomain,omitempty"`
 

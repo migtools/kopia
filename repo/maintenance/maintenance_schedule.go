@@ -46,7 +46,7 @@ type Schedule struct {
 	Runs map[TaskType][]RunInfo `json:"runs"`
 }
 
-// ReportRun adds the provided run information to the history and discards oldest entried.
+// ReportRun adds the provided run information to the history and discards oldest entries.
 func (s *Schedule) ReportRun(taskType TaskType, info RunInfo) {
 	if s.Runs == nil {
 		s.Runs = map[TaskType][]RunInfo{}
@@ -63,7 +63,12 @@ func (s *Schedule) ReportRun(taskType TaskType, info RunInfo) {
 }
 
 func getAES256GCM(rep repo.DirectRepository) (cipher.AEAD, error) {
-	c, err := aes.NewCipher(rep.DeriveKey(maintenanceScheduleKeyPurpose, maintenanceScheduleKeySize))
+	k, err := rep.DeriveKey(maintenanceScheduleKeyPurpose, maintenanceScheduleKeySize)
+	if err != nil {
+		return nil, errors.Wrap(err, "unable to derive key for encrypting maintenance schedule blob")
+	}
+
+	c, err := aes.NewCipher(k)
 	if err != nil {
 		return nil, errors.Wrap(err, "unable to create AES-256 cipher")
 	}

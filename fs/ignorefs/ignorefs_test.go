@@ -310,7 +310,7 @@ var cases = []struct {
 		},
 	},
 	{
-		desc: "absolut match",
+		desc: "absolute match",
 		setup: func(root *mockfs.Directory) {
 			root.Subdir("src").AddFileLines(".extraignore", []string{
 				"/sub/*.foo",
@@ -566,6 +566,7 @@ func TestIgnoreFS(t *testing.T) {
 			if tc.setup != nil {
 				tc.setup(root)
 			}
+
 			ifs := ignorefs.New(root, tc.policyTree)
 
 			expectedFiles := addAndSubtractFiles(originalFiles, tc.addedFiles, tc.ignoredFiles)

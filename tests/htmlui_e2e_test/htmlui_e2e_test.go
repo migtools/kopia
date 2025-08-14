@@ -86,7 +86,7 @@ func runInBrowser(t *testing.T, run func(ctx context.Context, sp *testutil.Serve
 	ctx, cancel := chromedp.NewContext(ctx)
 	defer cancel()
 
-	chromedp.ListenTarget(ctx, func(ev interface{}) {
+	chromedp.ListenTarget(ctx, func(ev any) {
 		if do, ok := ev.(*page.EventJavascriptDialogOpening); ok {
 			t.Logf("dialog opening: %v", do.Message)
 
@@ -183,10 +183,10 @@ func TestEndToEndTest(t *testing.T) {
 		downloadDir := testutil.TempDirectory(t)
 		snap1Path := testutil.TempDirectory(t)
 
-		// create a test snaphot
+		// create a test snapshot
 		createTestSnapshot(t, ctx, sp, tc, repoPath, snap1Path)
 
-		// navigate to the base page, wait unti we're redirected to 'Repository' page
+		// navigate to the base page, wait until we're redirected to 'Repository' page
 		require.NoError(t, chromedp.Run(ctx,
 			tc.log("clicking on snapshot source"),
 			chromedp.Click(`a[href*='/snapshots/single-source']`),
@@ -227,7 +227,7 @@ func TestConnectDisconnectReconnect(t *testing.T) {
 	runInBrowser(t, func(ctx context.Context, sp *testutil.ServerParameters, tc *TestContext) {
 		repoPath := testutil.TempDirectory(t)
 
-		// navigate to the base page, wait unti we're redirected to 'Repository' page
+		// navigate to the base page, wait until we're redirected to 'Repository' page
 		require.NoError(t, chromedp.Run(ctx,
 			chromedp.Navigate(sp.BaseURL),
 			chromedp.WaitVisible("button[data-testid='provider-filesystem']"),
@@ -335,9 +335,10 @@ func TestByteRepresentation(t *testing.T) {
 		snap1Path := testutil.TempDirectory(t)
 
 		var base2 string
+
 		var base10 string
 
-		// create a test snaphot
+		// create a test snapshot
 		createTestSnapshot(t, ctx, sp, tc, repoPath, snap1Path)
 
 		// begin test
@@ -355,7 +356,7 @@ func TestByteRepresentation(t *testing.T) {
 			tc.log("clicking on snapshots tab"),
 			chromedp.Click("a[data-testid='tab-snapshots']", chromedp.BySearch),
 			// getting text from the third column of the first row indicating the size of the snapshot
-			chromedp.Text(`#root > div > table > tbody > tr:nth-child(1) > td:nth-child(3)`, &base2, chromedp.ByQuery),
+			chromedp.Text(`#root table > tbody > tr:nth-child(1) > td:nth-child(3)`, &base2, chromedp.ByQuery),
 			tc.captureScreenshot("snapshot-base-2"),
 
 			tc.log("clicking on preferences tab"),
@@ -368,7 +369,7 @@ func TestByteRepresentation(t *testing.T) {
 			tc.log("clicking on snapshots tab"),
 			chromedp.Click("a[data-testid='tab-snapshots']", chromedp.BySearch),
 			// getting text from the third column of the first row indicating the size of the snapshot
-			chromedp.Text(`#root > div > table > tbody > tr:nth-child(1) > td:nth-child(3)`, &base10, chromedp.BySearch),
+			chromedp.Text(`#root table > tbody > tr:nth-child(1) > td:nth-child(3)`, &base10, chromedp.BySearch),
 			tc.captureScreenshot("snapshot-base-10"),
 		))
 
@@ -385,7 +386,7 @@ func TestPagination(t *testing.T) {
 		repoPath := testutil.TempDirectory(t)
 		snap1Path := testutil.TempDirectory(t)
 
-		// create a test snaphot
+		// create a test snapshot
 		createTestSnapshot(t, ctx, sp, tc, repoPath, snap1Path)
 	})
 }

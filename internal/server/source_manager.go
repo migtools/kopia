@@ -17,7 +17,7 @@ import (
 	"github.com/kopia/kopia/repo"
 	"github.com/kopia/kopia/snapshot"
 	"github.com/kopia/kopia/snapshot/policy"
-	"github.com/kopia/kopia/snapshot/snapshotfs"
+	"github.com/kopia/kopia/snapshot/upload"
 )
 
 const (
@@ -40,7 +40,7 @@ type sourceManagerServerInterface interface {
 // - FAILED - inactive
 // - UPLOADING - uploading a snapshot.
 type sourceManager struct {
-	snapshotfs.NullUploadProgress
+	upload.NullUploadProgress
 
 	server sourceManagerServerInterface
 
@@ -52,7 +52,7 @@ type sourceManager struct {
 
 	sourceMutex sync.RWMutex
 	// +checklocks:sourceMutex
-	uploader *snapshotfs.Uploader
+	uploader *upload.Uploader
 	// +checklocks:sourceMutex
 	pol policy.SchedulingPolicy
 	// +checklocks:sourceMutex
@@ -74,7 +74,7 @@ type sourceManager struct {
 	// +checklocks:sourceMutex
 	isReadOnly bool
 
-	progress *snapshotfs.CountingUploadProgress
+	progress *upload.CountingUploadProgress
 }
 
 func (s *sourceManager) Status() *serverapi.SourceStatus {
@@ -139,14 +139,14 @@ func (s *sourceManager) setNextSnapshotTime(t time.Time) {
 	s.nextSnapshotTime = &t
 }
 
-func (s *sourceManager) currentUploader() *snapshotfs.Uploader {
+func (s *sourceManager) currentUploader() *upload.Uploader {
 	s.sourceMutex.RLock()
 	defer s.sourceMutex.RUnlock()
 
 	return s.uploader
 }
 
-func (s *sourceManager) setUploader(u *snapshotfs.Uploader) {
+func (s *sourceManager) setUploader(u *upload.Uploader) {
 	s.sourceMutex.Lock()
 	defer s.sourceMutex.Unlock()
 
@@ -190,23 +190,25 @@ func (s *sourceManager) runLocal(ctx context.Context) {
 		case <-s.snapshotRequests:
 			if s.isPaused() {
 				s.setStatus("PAUSED")
-			} else {
-				s.setStatus("PENDING")
 
-				log(ctx).Debugw("snapshotting", "source", s.src)
-
-				if err := s.server.runSnapshotTask(ctx, s.src, s.snapshotInternal); err != nil {
-					log(ctx).Errorf("snapshot error: %v", err)
-
-					s.backoffBeforeNextSnapshot()
-				} else {
-					s.refreshStatus(ctx)
-				}
-
-				s.server.refreshScheduler("snapshot finished")
-
-				s.setStatus("IDLE")
+				continue
 			}
+
+			s.setStatus("PENDING")
+
+			log(ctx).Debugw("snapshotting", "source", s.src)
+
+			if err := s.server.runSnapshotTask(ctx, s.src, s.snapshotInternal); err != nil {
+				log(ctx).Errorf("snapshot error: %v", err)
+
+				s.backoffBeforeNextSnapshot()
+			} else {
+				s.refreshStatus(ctx)
+			}
+
+			s.server.refreshScheduler("snapshot finished")
+
+			s.setStatus("IDLE")
 		}
 	}
 }
@@ -351,7 +353,7 @@ func (s *sourceManager) snapshotInternal(ctx context.Context, ctrl uitask.Contro
 	}, func(ctx context.Context, w repo.RepositoryWriter) error {
 		log(ctx).Debugf("uploading %v", s.src)
 
-		u := snapshotfs.NewUploader(w)
+		u := upload.NewUploader(w)
 
 		ctrl.OnCancel(u.Cancel)
 
@@ -475,7 +477,7 @@ func (s *sourceManager) refreshStatus(ctx context.Context) {
 
 type uitaskProgress struct {
 	nextReportTimeNanos atomic.Int64
-	p                   *snapshotfs.CountingUploadProgress
+	p                   *upload.CountingUploadProgress
 	ctrl                uitask.Controller
 }
 
@@ -586,7 +588,7 @@ func (t *uitaskProgress) EstimatedDataSize(fileCount, totalBytes int64) {
 }
 
 // EstimationParameters returns parameters to be used for estimation.
-func (t *uitaskProgress) EstimationParameters() snapshotfs.EstimationParameters {
+func (t *uitaskProgress) EstimationParameters() upload.EstimationParameters {
 	return t.p.EstimationParameters()
 }
 
@@ -598,7 +600,7 @@ func newSourceManager(src snapshot.SourceInfo, server *Server, rep repo.Reposito
 		state:            "UNKNOWN",
 		closed:           make(chan struct{}),
 		snapshotRequests: make(chan struct{}, 1),
-		progress:         &snapshotfs.CountingUploadProgress{},
+		progress:         &upload.CountingUploadProgress{},
 	}
 
 	return m

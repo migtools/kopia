@@ -17,9 +17,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pkg/errors"
-
 	"github.com/coreos/go-systemd/v22/activation"
+	"github.com/pkg/errors"
 
 	"github.com/kopia/kopia/internal/tlsutil"
 )
@@ -125,7 +124,7 @@ func (c *commandServerStart) startServerWithOptionalTLSAndListener(ctx context.C
 		return checkErrServerClosed(ctx, httpServer.ServeTLS(listener, c.serverStartTLSCertFile, c.serverStartTLSKeyFile), "error starting TLS server")
 
 	case c.serverStartTLSGenerateCert:
-		// PEM files not provided, generate in-memory TLS cert/key but don't persit.
+		// PEM files not provided, generate in-memory TLS cert/key but don't persist.
 		cert, key, err := c.generateServerCertificate(ctx)
 		if err != nil {
 			return errors.Wrap(err, "unable to generate server cert")
