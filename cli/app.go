@@ -1,4 +1,4 @@
-// Package cli implements command-line commands for the Kopia.
+// Package cli implements command-line commands for OADP VM Data Protection.
 package cli
 
 import (
@@ -30,7 +30,7 @@ import (
 	"github.com/kopia/kopia/snapshot/snapshotmaintenance"
 )
 
-var log = logging.Module("kopia/cli")
+var log = logging.Module("oadp/cli")
 
 var tracer = otel.Tracer("cli")
 
@@ -120,7 +120,7 @@ type advancedAppServices interface {
 	enableErrorNotifications() bool
 }
 
-// App contains per-invocation flags and state of Kopia CLI.
+// App contains per-invocation flags and state of OADP-VMDP CLI.
 type App struct {
 	// global flags
 	enableAutomaticMaintenance    bool
@@ -268,22 +268,21 @@ func (c *App) setup(app *kingpin.Application) {
 	app.Flag("auto-maintenance", "Automatic maintenance").Default("true").Hidden().BoolVar(&c.enableAutomaticMaintenance)
 
 	// hidden flags to control auto-update behavior.
-	app.Flag("initial-update-check-delay", "Initial delay before first time update check").Default("24h").Hidden().Envar(c.EnvName("KOPIA_INITIAL_UPDATE_CHECK_DELAY")).DurationVar(&c.initialUpdateCheckDelay)
-	app.Flag("update-check-interval", "Interval between update checks").Default("168h").Hidden().Envar(c.EnvName("KOPIA_UPDATE_CHECK_INTERVAL")).DurationVar(&c.updateCheckInterval)
-	app.Flag("update-available-notify-interval", "Interval between update notifications").Default("1h").Hidden().Envar(c.EnvName("KOPIA_UPDATE_NOTIFY_INTERVAL")).DurationVar(&c.updateAvailableNotifyInterval)
-	app.Flag("config-file", "Specify the config file to use").Default("repository.config").Envar(c.EnvName("KOPIA_CONFIG_PATH")).StringVar(&c.configPath)
+	app.Flag("initial-update-check-delay", "Initial delay before first time update check").Default("24h").Hidden().Envar(c.EnvName("OADP_INITIAL_UPDATE_CHECK_DELAY")).DurationVar(&c.initialUpdateCheckDelay)
+	app.Flag("update-check-interval", "Interval between update checks").Default("168h").Hidden().Envar(c.EnvName("OADP_UPDATE_CHECK_INTERVAL")).DurationVar(&c.updateCheckInterval)
+	app.Flag("update-available-notify-interval", "Interval between update notifications").Default("1h").Hidden().Envar(c.EnvName("OADP_UPDATE_NOTIFY_INTERVAL")).DurationVar(&c.updateAvailableNotifyInterval)
+	app.Flag("config-file", "Specify the config file to use").Default("repository.config").Envar(c.EnvName("OADP_CONFIG_PATH")).StringVar(&c.configPath)
 	app.Flag("trace-storage", "Enables tracing of storage operations.").Default("true").Hidden().BoolVar(&c.traceStorage)
 	app.Flag("timezone", "Format time according to specified time zone (local, utc, original or time zone name)").Hidden().StringVar(&timeZone)
-	app.Flag("password", "Repository password.").Envar(c.EnvName("KOPIA_PASSWORD")).Short('p').StringVar(&c.password)
-	app.Flag("persist-credentials", "Persist credentials").Default("true").Envar(c.EnvName("KOPIA_PERSIST_CREDENTIALS_ON_CONNECT")).BoolVar(&c.persistCredentials)
-	app.Flag("disable-internal-log", "Disable internal log").Hidden().Envar(c.EnvName("KOPIA_DISABLE_INTERNAL_LOG")).BoolVar(&c.disableInternalLog)
-	app.Flag("advanced-commands", "Enable advanced (and potentially dangerous) commands.").Hidden().Envar(c.EnvName("KOPIA_ADVANCED_COMMANDS")).StringVar(&c.AdvancedCommands)
-	app.Flag("track-releasable", "Enable tracking of releasable resources.").Hidden().Envar(c.EnvName("KOPIA_TRACK_RELEASABLE")).StringsVar(&c.trackReleasable)
-	app.Flag("dump-allocator-stats", "Dump allocator stats at the end of execution.").Hidden().Envar(c.EnvName("KOPIA_DUMP_ALLOCATOR_STATS")).BoolVar(&c.dumpAllocatorStats)
-	app.Flag("upgrade-owner-id", "Repository format upgrade owner-id.").Hidden().Envar(c.EnvName("KOPIA_REPO_UPGRADE_OWNER_ID")).StringVar(&c.upgradeOwnerID)
-	app.Flag("upgrade-no-block", "Do not block when repository format upgrade is in progress, instead exit with a message.").Hidden().Default("false").Envar(c.EnvName("KOPIA_REPO_UPGRADE_NO_BLOCK")).BoolVar(&c.doNotWaitForUpgrade)
+	app.Flag("password", "BSL password.").Envar(c.EnvName("BSLS_PASSWORD")).Short('p').StringVar(&c.password)
+	app.Flag("persist-credentials", "Persist credentials").Default("true").Envar(c.EnvName("OADP_PERSIST_CREDENTIALS_ON_CONNECT")).BoolVar(&c.persistCredentials)
+	app.Flag("disable-internal-log", "Disable internal log").Hidden().Envar(c.EnvName("OADP_DISABLE_INTERNAL_LOG")).BoolVar(&c.disableInternalLog)
+	app.Flag("track-releasable", "Enable tracking of releasable resources.").Hidden().Envar(c.EnvName("OADP_TRACK_RELEASABLE")).StringsVar(&c.trackReleasable)
+	app.Flag("dump-allocator-stats", "Dump allocator stats at the end of execution.").Hidden().Envar(c.EnvName("OADP_DUMP_ALLOCATOR_STATS")).BoolVar(&c.dumpAllocatorStats)
+	app.Flag("upgrade-owner-id", "BSL format upgrade owner-id.").Hidden().Envar(c.EnvName("OADP_BSL_UPGRADE_OWNER_ID")).StringVar(&c.upgradeOwnerID)
+	app.Flag("upgrade-no-block", "Do not block when BSL format upgrade is in progress, instead exit with a message.").Hidden().Default("false").Envar(c.EnvName("OADP_BSL_UPGRADE_NO_BLOCK")).BoolVar(&c.doNotWaitForUpgrade)
 	app.Flag("error-notifications", "Send notification on errors").Hidden().
-		Envar(c.EnvName("KOPIA_SEND_ERROR_NOTIFICATIONS")).
+		Envar(c.EnvName("OADP_SEND_ERROR_NOTIFICATIONS")).
 		Default(errorNotificationsNonInteractive).
 		EnumVar(&c.errorNotifications, errorNotificationsAlways, errorNotificationsNever, errorNotificationsNonInteractive)
 
@@ -296,35 +295,28 @@ func (c *App) setup(app *kingpin.Application) {
 	c.setupOSSpecificKeychainFlags(c, app)
 
 	_ = app.Flag("caching", "Enables caching of objects (disable with --no-caching)").Default("true").Hidden().Action(
-		deprecatedFlag(c.stderrWriter, "The '--caching' flag is deprecated and has no effect, use 'kopia cache set' instead."),
+		deprecatedFlag(c.stderrWriter, "The '--caching' flag is deprecated and has no effect, use 'oadp-vmdp cache set' instead."),
 	).Bool()
 
 	_ = app.Flag("list-caching", "Enables caching of list results (disable with --no-list-caching)").Default("true").Hidden().Action(
-		deprecatedFlag(c.stderrWriter, "The '--list-caching' flag is deprecated and has no effect, use 'kopia cache set' instead."),
+		deprecatedFlag(c.stderrWriter, "The '--list-caching' flag is deprecated and has no effect, use 'oadp-vmdp cache set' instead."),
 	).Bool()
 
 	c.pf.setup(app)
 	c.progress.setup(c, app)
 
-	c.blob.setup(c, app)
-	c.benchmark.setup(c, app)
+	// OADP: Only include commands needed for VM backup/restore workflow
+	// Keep the CLI surface minimal to match supported workflows and reduce risk.
+	// NOTE: Advanced/admin command trees (blob/content/index/manifest) are intentionally
+	// not wired up here to keep future rebases simpler while preventing accidental use.
 	c.cache.setup(c, app)
-	c.content.setup(c, app)
-	c.diff.setup(c, app)
-	c.index.setup(c, app)
-	c.list.setup(c, app)
 	c.logs.setup(c, app)
-	c.notification.setup(c, app)
-	c.server.setup(c, app)
 	c.session.setup(c, app)
 	c.restore.setup(c, app)
 	c.show.setup(c, app)
-	c.snapshot.setup(c, app)
-	c.manifest.setup(c, app)
-	c.policy.setup(c, app)
-	c.mount.setup(c, app)
-	c.maintenance.setup(c, app)
-	c.repository.setup(c, app)
+	c.snapshot.setup(c, app) // renamed to "backup" in command_snapshot.go
+	// manifest commands intentionally not wired (advanced/admin)
+	c.repository.setup(c, app) // renamed to "bsl" in command_repository.go
 }
 
 // commandParent is implemented by app and commands that can have sub-commands.
@@ -336,19 +328,12 @@ type commandParent interface {
 func NewApp() *App {
 	return &App{
 		progress: &cliProgress{},
+		// OADP: Only include storage backends needed for VM users
+		// To add more backends later, uncomment or add lines here
 		cliStorageProviders: []StorageProvider{
-			{"from-config", "the provided configuration file", func() StorageFlags { return &storageFromConfigFlags{} }},
-
-			{"azure", "an Azure blob storage", func() StorageFlags { return &storageAzureFlags{} }},
-			{"b2", "a B2 bucket", func() StorageFlags { return &storageB2Flags{} }},
 			{"filesystem", "a filesystem", func() StorageFlags { return &storageFilesystemFlags{} }},
-			{"gcs", "a Google Cloud Storage bucket", func() StorageFlags { return &storageGCSFlags{} }},
-			{"gdrive", "a Google Drive folder", func() StorageFlags { return &storageGDriveFlags{} }},
-
-			{"rclone", "a rclone-based provided", func() StorageFlags { return &storageRcloneFlags{} }},
 			{"s3", "an S3 bucket", func() StorageFlags { return &storageS3Flags{} }},
-			{"sftp", "an SFTP storage", func() StorageFlags { return &storageSFTPFlags{} }},
-			{"webdav", "a WebDAV storage", func() StorageFlags { return &storageWebDAVFlags{} }},
+			// Removed: from-config, azure, b2, gcs, gdrive, rclone, sftp, webdav
 		},
 
 		// testability hooks
@@ -653,10 +638,9 @@ func (c *App) maybeRunMaintenance(ctx context.Context, rep repo.Repository) erro
 func (c *App) advancedCommand() {
 	if c.AdvancedCommands != "enabled" {
 		_, _ = errorColor.Fprintf(c.stderrWriter, `
-This command could be dangerous or lead to repository corruption when used improperly.
+This command could be dangerous or lead to BSL corruption when used improperly.
 
-Running this command is not needed for using Kopia. Instead, most users should rely on periodic repository maintenance. See https://kopia.io/docs/advanced/maintenance/ for more information.
-To run this command despite the warning, set --advanced-commands=enabled
+Running this command is not needed for normal usage. Instead, most users should rely on periodic automatic maintenance.
 
 `)
 
