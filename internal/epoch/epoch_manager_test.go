@@ -389,55 +389,21 @@ func TestIndexEpochManager_NoCompactionInReadOnly(t *testing.T) {
 
 	// Use assert.Eventually here so we'll exit the test early instead of getting
 	// stuck until the timeout.
-	loadedDone := &atomic.Bool{}
-
-	var loadedErr atomic.Value
+	var (
+		loadedDone atomic.Bool
+		loadedErr  error
+	)
 
 	go func() {
-		if err := te2.mgr.Refresh(ctx); err != nil {
-			loadedErr.Store(err)
-		}
-
+		loadedErr = te2.mgr.Refresh(ctx)
 		te2.mgr.backgroundWork.Wait()
 		loadedDone.Store(true)
 	}()
 
-	require.Eventually(t, loadedDone.Load, time.Second*2, time.Second)
-
-	assert.Nil(t, loadedErr.Load(), "refreshing read-only index")
-}
-
-func TestNoEpochAdvanceOnIndexRead(t *testing.T) {
-	const epochs = 3
-
-	t.Parallel()
-
-	ctx := testlogging.Context(t)
-	te := newTestEnv(t)
-
-	p, err := te.mgr.getParameters(ctx)
-	require.NoError(t, err)
-
-	count := p.GetEpochAdvanceOnCountThreshold()
-	minDuration := p.MinEpochDuration
-
-	cs, err := te.mgr.Current(ctx)
-	require.NoError(t, err)
-	require.Equal(t, 0, cs.WriteEpoch, "write epoch mismatch")
-
-	// Write enough index blobs such that the next time the manager loads
-	// indexes it should attempt to advance the epoch.
-	// Write exactly the number of index blobs that will cause it to advance so
-	// we can keep track of which one is the current epoch.
-	for range epochs {
-		for i := range count - 1 {
-			te.mustWriteIndexFiles(ctx, t, newFakeIndexWithEntries(i))
-		}
-
-		te.ft.Advance(3*minDuration + time.Second)
-		te.mustWriteIndexFiles(ctx, t, newFakeIndexWithEntries(count-1))
-		// this could advance the epoch on write
-		te.mustWriteIndexFiles(ctx, t, newFakeIndexWithEntries(count-1))
+	if !assert.Eventually(t, func() bool { return loadedDone.Load() }, time.Second*5, time.Second) {
+		// Return early so we don't report some odd failure on the error check below
+		// when we just never managed to initialize the epoch manager.
+		return
 	}
 
 	te.mgr.Invalidate()

@@ -115,7 +115,7 @@ func (l *jsonList) end() {
 }
 
 func (l *jsonList) emit(v interface{}) {
-	fmt.Fprintf(l.o.out, l.separator)
+	fmt.Fprint(l.o.out, l.separator)
 	fmt.Fprintf(l.o.out, "%s", l.o.jsonBytes(v))
 
 	if l.o.jsonIndent {
