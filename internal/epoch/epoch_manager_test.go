@@ -393,20 +393,17 @@ func TestIndexEpochManager_NoCompactionInReadOnly(t *testing.T) {
 	// Use assert.Eventually here so we'll exit the test early instead of getting
 	// stuck until the timeout.
 	var (
-		loadedDone bool
+		loadedDone atomic.Bool
 		loadedErr  error
 	)
 
 	go func() {
-		defer func() {
-			loadedDone = true
-		}()
-
 		loadedErr = te2.mgr.Refresh(ctx)
 		te2.mgr.backgroundWork.Wait()
+		loadedDone.Store(true)
 	}()
 
-	if !assert.Eventually(t, func() bool { return loadedDone }, time.Second*5, time.Second) {
+	if !assert.Eventually(t, func() bool { return loadedDone.Load() }, time.Second*5, time.Second) {
 		// Return early so we don't report some odd failure on the error check below
 		// when we just never managed to initialize the epoch manager.
 		return
