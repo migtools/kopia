@@ -47,5 +47,3 @@ jobs:
       run: make lint
     - name: Check Locks
       run: make check-locks
-    - name: Prettier
-      run: make check-prettier
