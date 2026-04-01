@@ -72,6 +72,16 @@
     </div>
     {{end}}
 
+    {{if .HasLicense}}
+    <div class="section">
+      <div class="section-header">License</div>
+      <div style="padding: 0.85rem 1.25rem; display: flex; align-items: center; justify-content: space-between;">
+        <span style="font-size: 0.9rem;">LICENSE</span>
+        <a class="download-btn" href="/download/LICENSE">View License</a>
+      </div>
+    </div>
+    {{end}}
+
     <div class="install-section">
       <h3>Installation</h3>
 
@@ -86,15 +96,15 @@
             <span class="comment"># Make it executable</span>
           </div>
           <div class="code-line">
-            <code class="cmd">chmod +x oadp-vmdp_*_linux_*</code>
-            <button class="copy-btn" onclick="copyCmd(this)" data-cmd="chmod +x oadp-vmdp_*_linux_*">Copy</button>
+            <code class="cmd">chmod +x oadp-vmdp_linux_*</code>
+            <button class="copy-btn" onclick="copyCmd(this)" data-cmd="chmod +x oadp-vmdp_linux_*">Copy</button>
           </div>
           <div class="code-line">
             <span class="comment"># Move to your PATH</span>
           </div>
           <div class="code-line">
-            <code class="cmd">sudo mv oadp-vmdp_*_linux_* /usr/local/bin/oadp-vmdp</code>
-            <button class="copy-btn" onclick="copyCmd(this)" data-cmd="sudo mv oadp-vmdp_*_linux_* /usr/local/bin/oadp-vmdp">Copy</button>
+            <code class="cmd">sudo mv oadp-vmdp_linux_* /usr/local/bin/oadp-vmdp</code>
+            <button class="copy-btn" onclick="copyCmd(this)" data-cmd="sudo mv oadp-vmdp_linux_* /usr/local/bin/oadp-vmdp">Copy</button>
           </div>
           <div class="code-line">
             <span class="comment"># Verify it works</span>
@@ -112,8 +122,8 @@
             <span class="comment"># Rename the downloaded binary</span>
           </div>
           <div class="code-line">
-            <code class="cmd">Rename-Item oadp-vmdp_*_windows_*.exe oadp-vmdp.exe</code>
-            <button class="copy-btn" onclick="copyCmd(this)" data-cmd="Rename-Item oadp-vmdp_*_windows_*.exe oadp-vmdp.exe">Copy</button>
+            <code class="cmd">Rename-Item oadp-vmdp_windows_*.exe oadp-vmdp.exe</code>
+            <button class="copy-btn" onclick="copyCmd(this)" data-cmd="Rename-Item oadp-vmdp_windows_*.exe oadp-vmdp.exe">Copy</button>
           </div>
           <div class="code-line">
             <span class="comment"># Verify it works</span>
