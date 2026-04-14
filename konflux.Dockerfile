@@ -27,7 +27,7 @@ RUN mkdir -p /archives && \
             out_name="oadp-vmdp_${os}_${arch}"; \
         fi; \
         echo "Building oadp-vmdp for ${os}/${arch}..."; \
-        CGO_ENABLED=1 GOOS=$os GOARCH=$arch \
+        CGO_ENABLED=0 GOOS=$os GOARCH=$arch \
             go build -trimpath -mod=mod \
             -tags="${BUILDTAGS}" \
             -ldflags="-s -w \
@@ -38,6 +38,7 @@ RUN mkdir -p /archives && \
             . ; \
         sha256sum /archives/$out_name > /archives/$out_name.sha256; \
     done && \
+    chmod -x /archives/oadp-vmdp_* && \
     cp LICENSE /archives/LICENSE && \
     rm -rf /root/.cache/go-build /tmp/*
 
