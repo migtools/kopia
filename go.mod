@@ -1,6 +1,6 @@
 module github.com/kopia/kopia
 
-go 1.26.0
+go 1.25
 
 require (
 	cloud.google.com/go/storage v1.57.2
