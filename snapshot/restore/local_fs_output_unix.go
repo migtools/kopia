@@ -15,7 +15,6 @@ func symlinkChown(path string, uid, gid int) error {
 	return unix.Lchown(path, uid, gid)
 }
 
-//nolint:revive
 func symlinkChmod(path string, mode os.FileMode) error {
 	// linux does not support permissions on symlinks
 	return nil

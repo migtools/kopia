@@ -269,7 +269,7 @@ func handleRepoSetDescription(ctx context.Context, rc requestContext) (interface
 	return handleRepoStatus(ctx, rc)
 }
 
-func handleRepoSupportedAlgorithms(ctx context.Context, _ requestContext) (interface{}, *apiError) {
+func handleRepoSupportedAlgorithms(ctx context.Context, rc requestContext) (interface{}, *apiError) {
 	res := &serverapi.SupportedAlgorithmsResponse{
 		DefaultHashAlgorithm:    hashing.DefaultAlgorithm,
 		SupportedHashAlgorithms: toAlgorithmInfo(hashing.SupportedAlgorithms(), neverDeprecated),
@@ -300,7 +300,7 @@ func handleRepoSupportedAlgorithms(ctx context.Context, _ requestContext) (inter
 	return res, nil
 }
 
-func neverDeprecated(string) bool {
+func neverDeprecated(n string) bool {
 	return false
 }
 
@@ -399,6 +399,7 @@ func handleRepoDisconnect(ctx context.Context, rc requestContext) (interface{}, 
 }
 
 func (s *Server) disconnect(ctx context.Context) error {
+	// release shared lock so that SetRepository can acquire exclusive lock
 	if err := s.SetRepository(ctx, nil); err != nil {
 		return err
 	}
@@ -417,7 +418,9 @@ func (s *Server) disconnect(ctx context.Context) error {
 }
 
 func handleRepoSync(ctx context.Context, rc requestContext) (interface{}, *apiError) {
-	rc.srv.Refresh()
+	if err := rc.srv.Refresh(ctx); err != nil {
+		return nil, internalServerError(errors.Wrap(err, "unable to refresh repository"))
+	}
 
 	return &serverapi.Empty{}, nil
 }

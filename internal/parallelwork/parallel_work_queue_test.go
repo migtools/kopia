@@ -224,23 +224,18 @@ func TestOnNthCompletion(t *testing.T) {
 		// callback must be called exactly 1 time
 		require.Equal(t, callbackInvoked.Load(), int32(1))
 
-		var (
-			errCalledCount int
-			noErrorCount   int
-		)
-
+		var cnt int
 		for result := range results {
-			if result == nil {
-				noErrorCount++
-				continue
+			cnt++
+			switch cnt {
+			// n-th invocation must run and return an expected error
+			case n:
+				require.Error(t, result)
+				require.ErrorIs(t, result, errCalled)
+			// other invocations must not run and return any error
+			default:
+				require.NoError(t, result)
 			}
-
-			errCalledCount++
-
-			require.ErrorIs(t, result, errCalled)
 		}
-
-		require.Equal(t, errCalledCount, 1)
-		require.Equal(t, noErrorCount, n)
 	})
 }

@@ -19,7 +19,6 @@ import (
 
 	"github.com/kopia/kopia/internal/connection"
 	"github.com/kopia/kopia/internal/dirutil"
-	"github.com/kopia/kopia/internal/gather"
 	"github.com/kopia/kopia/internal/iocopy"
 	"github.com/kopia/kopia/internal/ospath"
 	"github.com/kopia/kopia/repo/blob"
@@ -40,7 +39,6 @@ const (
 // sftpStorage implements blob.Storage on top of sftp.
 type sftpStorage struct {
 	sharded.Storage
-	blob.DefaultProviderImplementation
 }
 
 type sftpImpl struct {
@@ -119,8 +117,6 @@ func (s *sftpStorage) GetCapacity(ctx context.Context) (blob.Capacity, error) {
 }
 
 func (s *sftpImpl) GetBlobFromPath(ctx context.Context, dirPath, fullPath string, offset, length int64, output blob.OutputBuffer) error {
-	_ = dirPath
-
 	//nolint:wrapcheck
 	return s.rec.UsingConnectionNoResult(ctx, "GetBlobFromPath", func(conn connection.Connection) error {
 		r, err := sftpClientFromConnection(conn).Open(fullPath)
@@ -166,8 +162,6 @@ func (s *sftpImpl) GetBlobFromPath(ctx context.Context, dirPath, fullPath string
 }
 
 func (s *sftpImpl) GetMetadataFromPath(ctx context.Context, dirPath, fullPath string) (blob.Metadata, error) {
-	_ = dirPath
-
 	return connection.UsingConnection(ctx, s.rec, "GetMetadataFromPath", func(conn connection.Connection) (blob.Metadata, error) {
 		fi, err := sftpClientFromConnection(conn).Stat(fullPath)
 		if isNotExist(err) {
@@ -186,23 +180,11 @@ func (s *sftpImpl) GetMetadataFromPath(ctx context.Context, dirPath, fullPath st
 }
 
 func (s *sftpImpl) PutBlobInPath(ctx context.Context, dirPath, fullPath string, data blob.Bytes, opts blob.PutOptions) error {
-	_ = dirPath
-
 	switch {
 	case opts.HasRetentionOptions():
 		return errors.Wrap(blob.ErrUnsupportedPutBlobOption, "blob-retention")
 	case opts.DoNotRecreate:
 		return errors.Wrap(blob.ErrUnsupportedPutBlobOption, "do-not-recreate")
-	}
-
-	// SFTP client Write() does not do any buffering leading to sub-optimal
-	// performance of gather writes, so we copy the data to a contiguous
-	// temporary buffer first.
-	contig := gather.NewWriteBufferMaxContiguous()
-	defer contig.Close()
-
-	if _, err := data.WriteTo(contig); err != nil {
-		return errors.Wrap(err, "can't write to comtiguous buffer")
 	}
 
 	//nolint:wrapcheck
@@ -219,7 +201,7 @@ func (s *sftpImpl) PutBlobInPath(ctx context.Context, dirPath, fullPath string, 
 			return errors.Wrap(err, "cannot create temporary file")
 		}
 
-		if _, err = contig.Bytes().WriteTo(f); err != nil {
+		if _, err = data.WriteTo(f); err != nil {
 			return errors.Wrap(err, "can't write temporary file")
 		}
 
@@ -237,7 +219,7 @@ func (s *sftpImpl) PutBlobInPath(ctx context.Context, dirPath, fullPath string, 
 		}
 
 		if t := opts.SetModTime; !t.IsZero() {
-			if chtimesErr := sftpClientFromConnection(conn).Chtimes(fullPath, t, t); chtimesErr != nil {
+			if chtimesErr := sftpClientFromConnection(conn).Chtimes(fullPath, t, t); err != nil {
 				return errors.Wrap(chtimesErr, "can't change file times")
 			}
 		}
@@ -272,8 +254,6 @@ func (osInterface) IsPathSeparator(c byte) bool {
 }
 
 func (osi osInterface) Mkdir(name string, perm os.FileMode) error {
-	_ = perm
-
 	//nolint:wrapcheck
 	return osi.cli.Mkdir(name)
 }
@@ -308,8 +288,6 @@ func isNotExist(err error) bool {
 }
 
 func (s *sftpImpl) DeleteBlobInPath(ctx context.Context, dirPath, fullPath string) error {
-	_ = dirPath
-
 	//nolint:wrapcheck
 	return s.rec.UsingConnectionNoResult(ctx, "DeleteBlobInPath", func(conn connection.Connection) error {
 		err := sftpClientFromConnection(conn).Remove(fullPath)
@@ -351,13 +329,17 @@ func writeKnownHostsDataStringToTempFile(data string) (string, error) {
 		return "", errors.Wrap(err, "error creating temp file")
 	}
 
-	defer tf.Close() //nolint:errcheck
+	defer tf.Close() //nolint:errcheck,gosec
 
 	if _, err := tf.WriteString(data); err != nil {
 		return "", errors.Wrap(err, "error writing temporary file")
 	}
 
 	return tf.Name(), nil
+}
+
+func (s *sftpStorage) FlushCaches(ctx context.Context) error {
+	return nil
 }
 
 // getHostKeyCallback returns a HostKeyCallback that validates the connected host based on KnownHostsFile or KnownHostsData.
@@ -548,7 +530,7 @@ func New(ctx context.Context, opts *Options, isCreate bool) (blob.Storage, error
 	}
 
 	r := &sftpStorage{
-		Storage: sharded.New(impl, opts.Path, opts.Options, isCreate),
+		sharded.New(impl, opts.Path, opts.Options, isCreate),
 	}
 
 	impl.rec = connection.NewReconnector(impl)

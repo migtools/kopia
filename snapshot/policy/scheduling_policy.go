@@ -5,10 +5,8 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
-	"strings"
 	"time"
 
-	"github.com/hashicorp/cronexpr"
 	"github.com/pkg/errors"
 
 	"github.com/kopia/kopia/repo"
@@ -61,17 +59,13 @@ type SchedulingPolicy struct {
 	TimesOfDay         []TimeOfDay `json:"timeOfDay,omitempty"`
 	NoParentTimesOfDay bool        `json:"noParentTimeOfDay,omitempty"`
 	Manual             bool        `json:"manual,omitempty"`
-	Cron               []string    `json:"cron,omitempty"`
-	RunMissed          bool        `json:"runMissed,omitempty"`
 }
 
 // SchedulingPolicyDefinition specifies which policy definition provided the value of a particular field.
 type SchedulingPolicyDefinition struct {
 	IntervalSeconds snapshot.SourceInfo `json:"intervalSeconds,omitempty"`
 	TimesOfDay      snapshot.SourceInfo `json:"timeOfDay,omitempty"`
-	Cron            snapshot.SourceInfo `json:"cron,omitempty"`
 	Manual          snapshot.SourceInfo `json:"manual,omitempty"`
-	RunMissed       snapshot.SourceInfo `json:"runMissed,omitempty"`
 }
 
 // Interval returns the snapshot interval or zero if not specified.
@@ -128,41 +122,7 @@ func (p *SchedulingPolicy) NextSnapshotTime(previousSnapshotTime, now time.Time)
 		}
 	}
 
-	for _, e := range p.Cron {
-		ce, err := cronexpr.Parse(stripCronComment(e))
-		if err != nil {
-			// ignore invalid crontab entries, nothing we can do at this point
-			// we already validated cron expressions them when they were added to the policy.
-			continue
-		}
-
-		nt := ce.Next(now)
-		if nt.IsZero() {
-			continue
-		}
-
-		if !ok || nt.Before(nextSnapshotTime) {
-			nextSnapshotTime = nt
-			ok = true
-		}
-	}
-
-	if ok && p.checkMissedSnapshot(now, previousSnapshotTime, nextSnapshotTime) {
-		// if RunMissed is set and last run was missed, and next run is at least 30 mins from now, then run now
-		nextSnapshotTime = now
-		ok = true
-	}
-
 	return nextSnapshotTime, ok
-}
-
-// Check if a previous snapshot was missed and should be started now.
-func (p *SchedulingPolicy) checkMissedSnapshot(now, previousSnapshotTime, nextSnapshotTime time.Time) bool {
-	const oneDay = 24 * time.Hour
-
-	const halfhour = 30 * time.Minute
-
-	return (len(p.TimesOfDay) > 0 || len(p.Cron) > 0) && p.RunMissed && previousSnapshotTime.Add(oneDay-halfhour).Before(now) && nextSnapshotTime.After(now.Add(halfhour))
 }
 
 // Merge applies default values from the provided policy.
@@ -177,15 +137,12 @@ func (p *SchedulingPolicy) Merge(src SchedulingPolicy, def *SchedulingPolicyDefi
 		}
 	}
 
-	mergeStringList(&p.Cron, src.Cron, &def.Cron, si)
-
 	if src.NoParentTimesOfDay {
 		// prevent future merges
 		p.NoParentTimesOfDay = src.NoParentTimesOfDay
 	}
 
 	mergeBool(&p.Manual, src.Manual, &def.Manual, si)
-	mergeBool(&p.RunMissed, src.RunMissed, &def.RunMissed, si)
 }
 
 // IsManualSnapshot returns the SchedulingPolicy manual value from the given policy tree.
@@ -220,17 +177,5 @@ func ValidateSchedulingPolicy(p SchedulingPolicy) error {
 		return errors.New("invalid scheduling policy: manual cannot be combined with other scheduling policies")
 	}
 
-	for _, e := range p.Cron {
-		if e2 := stripCronComment(e); e2 != "" {
-			if _, err := cronexpr.Parse(e2); err != nil {
-				return errors.Errorf("invalid cron expression %q", e)
-			}
-		}
-	}
-
 	return nil
-}
-
-func stripCronComment(s string) string {
-	return strings.TrimSpace(strings.SplitN(s, "#", 2)[0]) //nolint:gomnd
 }

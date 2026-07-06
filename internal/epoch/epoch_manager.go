@@ -39,33 +39,30 @@ type ParametersProvider interface {
 var ErrVerySlowIndexWrite = errors.Errorf("extremely slow index write - index write took more than two epochs")
 
 // Parameters encapsulates all parameters that influence the behavior of epoch manager.
-//
-// Note as a historical mistake, JSON tags are not camelCase, but rather PascalCase. We can't change
-// that since the parameters are stored in a repository.
 type Parameters struct {
 	// whether epoch manager is enabled, must be true.
-	Enabled bool `json:"Enabled"`
+	Enabled bool
 
 	// how frequently each client will list blobs to determine the current epoch.
-	EpochRefreshFrequency time.Duration `json:"EpochRefreshFrequency"`
+	EpochRefreshFrequency time.Duration
 
 	// number of epochs between full checkpoints.
-	FullCheckpointFrequency int `json:"FullCheckpointFrequency"`
+	FullCheckpointFrequency int
 
 	// do not delete uncompacted blobs if the corresponding compacted blob age is less than this.
-	CleanupSafetyMargin time.Duration `json:"CleanupSafetyMargin"`
+	CleanupSafetyMargin time.Duration
 
 	// minimum duration of an epoch
-	MinEpochDuration time.Duration `json:"MinEpochDuration"`
+	MinEpochDuration time.Duration
 
 	// advance epoch if number of files exceeds this
-	EpochAdvanceOnCountThreshold int `json:"EpochAdvanceOnCountThreshold"`
+	EpochAdvanceOnCountThreshold int
 
 	// advance epoch if total size of files exceeds this.
-	EpochAdvanceOnTotalSizeBytesThreshold int64 `json:"EpochAdvanceOnTotalSizeBytesThreshold"`
+	EpochAdvanceOnTotalSizeBytesThreshold int64
 
 	// number of blobs to delete in parallel during cleanup
-	DeleteParallelism int `json:"DeleteParallelism"`
+	DeleteParallelism int
 }
 
 // GetEpochManagerEnabled returns whether epoch manager is enabled, must be true.
@@ -592,8 +589,6 @@ func (e *Manager) maybeGenerateNextRangeCheckpointAsync(ctx context.Context, cs 
 }
 
 func (e *Manager) maybeOptimizeRangeCheckpointsAsync(ctx context.Context, cs CurrentSnapshot) {
-	// TODO: implement me
-	_ = cs
 }
 
 func (e *Manager) maybeStartCleanupAsync(ctx context.Context, cs CurrentSnapshot, p *Parameters) {
@@ -694,7 +689,7 @@ func (e *Manager) refreshAttemptLocked(ctx context.Context) error {
 		len(ues[cs.WriteEpoch+1]),
 		cs.ValidUntil.Format(time.RFC3339Nano))
 
-	if !e.st.IsReadOnly() && shouldAdvance(cs.UncompactedEpochSets[cs.WriteEpoch], p.MinEpochDuration, p.EpochAdvanceOnCountThreshold, p.EpochAdvanceOnTotalSizeBytesThreshold) {
+	if shouldAdvance(cs.UncompactedEpochSets[cs.WriteEpoch], p.MinEpochDuration, p.EpochAdvanceOnCountThreshold, p.EpochAdvanceOnTotalSizeBytesThreshold) {
 		if err := e.advanceEpoch(ctx, cs); err != nil {
 			return errors.Wrap(err, "error advancing epoch")
 		}
@@ -708,13 +703,9 @@ func (e *Manager) refreshAttemptLocked(ctx context.Context) error {
 
 	e.lastKnownState = cs
 
-	// Disable compaction and cleanup operations when running in read-only mode
-	// since they'll just fail when they try to mutate the underlying storage.
-	if !e.st.IsReadOnly() {
-		e.maybeGenerateNextRangeCheckpointAsync(ctx, cs, p)
-		e.maybeStartCleanupAsync(ctx, cs, p)
-		e.maybeOptimizeRangeCheckpointsAsync(ctx, cs)
-	}
+	e.maybeGenerateNextRangeCheckpointAsync(ctx, cs, p)
+	e.maybeStartCleanupAsync(ctx, cs, p)
+	e.maybeOptimizeRangeCheckpointsAsync(ctx, cs)
 
 	return nil
 }

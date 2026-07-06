@@ -76,7 +76,6 @@ func TestPolicies(t *testing.T) {
 		wantNeverCompress               []string
 		wantNeverCompressSource         snapshot.SourceInfo
 		wantUpcomingSnapshotTimesLength int
-		wantSchedulingError             string
 	}{
 		{
 			si:                       si0,
@@ -141,19 +140,6 @@ func TestPolicies(t *testing.T) {
 			},
 			wantUpcomingSnapshotTimesLength: 3,
 		},
-		{
-			si:                       si0,
-			wantCompressorName:       compression.Name("none"),
-			wantNeverCompress:        nil,
-			wantCompressorNameSource: policy.GlobalPolicySourceInfo,
-			wantNeverCompressSource:  policy.GlobalPolicySourceInfo,
-			updates: &policy.Policy{
-				SchedulingPolicy: policy.SchedulingPolicy{
-					Cron: []string{"invalid"},
-				},
-			},
-			wantSchedulingError: "invalid cron expression \"invalid\"",
-		},
 	}
 
 	for i, tc := range cases {
@@ -168,7 +154,6 @@ func TestPolicies(t *testing.T) {
 			require.Equal(t, tc.wantCompressorNameSource, res.Definition.CompressionPolicy.CompressorName)
 			require.Equal(t, tc.wantNeverCompressSource, res.Definition.CompressionPolicy.NeverCompress)
 			require.Len(t, res.UpcomingSnapshotTimes, tc.wantUpcomingSnapshotTimesLength)
-			require.Equal(t, tc.wantSchedulingError, res.SchedulingError)
 
 			for j, ust := range res.UpcomingSnapshotTimes {
 				require.Equal(t, ust.Truncate(60*time.Second), ust)

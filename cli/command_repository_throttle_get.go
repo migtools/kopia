@@ -3,8 +3,6 @@ package cli
 import (
 	"context"
 
-	"github.com/pkg/errors"
-
 	"github.com/kopia/kopia/repo"
 )
 
@@ -23,7 +21,7 @@ func (c *commandRepositoryThrottleGet) run(ctx context.Context, rep repo.DirectR
 	limits := rep.Throttler().Limits()
 
 	if err := c.ctg.output(&limits); err != nil {
-		return errors.Wrap(err, "output")
+		return err
 	}
 
 	return nil

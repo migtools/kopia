@@ -28,7 +28,7 @@ func getUIPreferencesOrEmpty(s serverInterface) (serverapi.UIPreferences, error)
 		return p, errors.Wrap(err, "unable to open UI preferences file")
 	}
 
-	defer f.Close() //nolint:errcheck
+	defer f.Close() //nolint:errcheck,gosec
 
 	if err := json.NewDecoder(f).Decode(&p); err != nil {
 		return p, errors.Wrap(err, "invalid UI preferences file")

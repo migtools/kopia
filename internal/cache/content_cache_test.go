@@ -11,7 +11,6 @@ import (
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/exp/slices"
 
 	"github.com/kopia/kopia/internal/blobtesting"
 	"github.com/kopia/kopia/internal/cache"
@@ -34,64 +33,7 @@ func newUnderlyingStorageForContentCacheTesting(t *testing.T) blob.Storage {
 	return st
 }
 
-func TestCacheExpiration_SoftLimitNoMinAge(t *testing.T) {
-	// cache is 10k, each blob is 4k, so we can store 2 blobs before they are evicted.
-	wantEvicted := []blob.ID{"a", "b"}
-
-	verifyCacheExpiration(t, cache.SweepSettings{
-		MaxSizeBytes:   10000,
-		TouchThreshold: -1,
-	}, wantEvicted)
-}
-
-func TestCacheExpiration_SoftLimitWithMinAge(t *testing.T) {
-	// cache is 10k, each blob is 4k, cache will grow beyond the limit but will not evict anything.
-	verifyCacheExpiration(t, cache.SweepSettings{
-		MaxSizeBytes:   10000,
-		TouchThreshold: -1,
-		MinSweepAge:    time.Hour,
-	}, nil)
-}
-
-func TestCacheExpiration_HardLimitWithMinAge(t *testing.T) {
-	// cache is 10k, each blob is 4k, cache will grow beyond the limit but will not evict anything.
-	wantEvicted := []blob.ID{"a", "b"}
-
-	verifyCacheExpiration(t, cache.SweepSettings{
-		MaxSizeBytes:   10000,
-		TouchThreshold: -1,
-		MinSweepAge:    time.Hour,
-		LimitBytes:     10000,
-	}, wantEvicted)
-}
-
-func TestCacheExpiration_HardLimitAboveSoftLimit(t *testing.T) {
-	wantExpired := []blob.ID{"a"}
-
-	verifyCacheExpiration(t, cache.SweepSettings{
-		MaxSizeBytes:   10000,
-		TouchThreshold: -1,
-		MinSweepAge:    time.Hour,
-		LimitBytes:     13000,
-	}, wantExpired)
-}
-
-func TestCacheExpiration_HardLimitBelowSoftLimit(t *testing.T) {
-	wantExpired := []blob.ID{"a", "b", "c"}
-
-	verifyCacheExpiration(t, cache.SweepSettings{
-		MaxSizeBytes:   10000,
-		TouchThreshold: -1,
-		MinSweepAge:    time.Hour,
-		LimitBytes:     5000,
-	}, wantExpired)
-}
-
-// The test will fetch 4 items into the cache, named "a", "b", "c", "d", each 4000 bytes in size
-// verify that the cache is evicting correct items based on the sweep settings.
-//
-//nolint:thelper
-func verifyCacheExpiration(t *testing.T, sweepSettings cache.SweepSettings, wantEvicted []blob.ID) {
+func TestCacheExpiration(t *testing.T) {
 	cacheData := blobtesting.DataMap{}
 
 	// on Windows, the time does not always move forward (sometimes clock.Now() returns exactly the same value for consecutive invocations)
@@ -115,7 +57,10 @@ func verifyCacheExpiration(t *testing.T, sweepSettings cache.SweepSettings, want
 	ctx := testlogging.Context(t)
 	cc, err := cache.NewContentCache(ctx, underlyingStorage, cache.Options{
 		Storage: cacheStorage.(cache.Storage),
-		Sweep:   sweepSettings,
+		Sweep: cache.SweepSettings{
+			MaxSizeBytes:   10000,
+			TouchThreshold: -1,
+		},
 		TimeNow: movingTimeFunc,
 	}, nil)
 
@@ -126,26 +71,34 @@ func verifyCacheExpiration(t *testing.T, sweepSettings cache.SweepSettings, want
 	var tmp gather.WriteBuffer
 	defer tmp.Close()
 
-	const underlyingBlobID = "content-4k"
-
-	err = cc.GetContent(ctx, "a", underlyingBlobID, 0, -1, &tmp) // 4k
+	err = cc.GetContent(ctx, "00000a", "content-4k", 0, -1, &tmp) // 4k
 	require.NoError(t, err)
-	err = cc.GetContent(ctx, "b", underlyingBlobID, 0, -1, &tmp) // 4k
+	err = cc.GetContent(ctx, "00000b", "content-4k", 0, -1, &tmp) // 4k
 	require.NoError(t, err)
-	err = cc.GetContent(ctx, "c", underlyingBlobID, 0, -1, &tmp) // 4k
+	err = cc.GetContent(ctx, "00000c", "content-4k", 0, -1, &tmp) // 4k
 	require.NoError(t, err)
-	err = cc.GetContent(ctx, "d", underlyingBlobID, 0, -1, &tmp) // 4k
+	err = cc.GetContent(ctx, "00000d", "content-4k", 0, -1, &tmp) // 4k
 	require.NoError(t, err)
 
-	// delete underlying storage blob to identify cache items that have been evicted
-	// all other items will be fetched from the cache.
-	require.NoError(t, underlyingStorage.DeleteBlob(ctx, underlyingBlobID))
+	// 00000a and 00000b will be removed from cache because it's the oldest.
+	// to verify, let's remove content-4k from the underlying storage and make sure we can still read
+	// 00000c and 00000d from the cache but not 00000a nor 00000b
+	require.NoError(t, underlyingStorage.DeleteBlob(ctx, "content-4k"))
 
-	for _, blobID := range []blob.ID{"a", "b", "c", "d"} {
-		if slices.Contains(wantEvicted, blobID) {
-			require.ErrorIs(t, cc.GetContent(ctx, string(blobID), underlyingBlobID, 0, -1, &tmp), blob.ErrBlobNotFound, "expected item not found %v", blobID)
-		} else {
-			require.NoError(t, cc.GetContent(ctx, string(blobID), underlyingBlobID, 0, -1, &tmp), "expected item to be found %v", blobID)
+	cases := []struct {
+		contentID     string
+		expectedError error
+	}{
+		{"00000a", blob.ErrBlobNotFound},
+		{"00000b", blob.ErrBlobNotFound},
+		{"00000c", nil},
+		{"00000d", nil},
+	}
+
+	for _, tc := range cases {
+		got := cc.GetContent(ctx, tc.contentID, "content-4k", 0, -1, &tmp)
+		if assert.ErrorIs(t, got, tc.expectedError, "tc.contentID: %v", tc.contentID) {
+			t.Logf("got correct error %v when reading content %v", tc.expectedError, tc.contentID)
 		}
 	}
 }

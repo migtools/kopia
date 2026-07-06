@@ -14,11 +14,10 @@ type scanResults struct {
 	totalFileSize int64
 }
 
-func (e *scanResults) Error(context.Context, string, error, bool) {}
+func (e *scanResults) Error(ctx context.Context, filename string, err error, isIgnored bool) {}
 
-func (e *scanResults) Processing(context.Context, string) {}
+func (e *scanResults) Processing(ctx context.Context, pathname string) {}
 
-//nolint:revive
 func (e *scanResults) Stats(ctx context.Context, s *snapshot.Stats, includedFiles, excludedFiles SampleBuckets, excludedDirs []string, final bool) {
 	if final {
 		e.numFiles = int(atomic.LoadInt32(&s.TotalFileCount))

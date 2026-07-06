@@ -36,7 +36,6 @@ const (
 // may be accessed using WebDAV or File interchangeably.
 type davStorage struct {
 	sharded.Storage
-	blob.DefaultProviderImplementation
 }
 
 type davStorageImpl struct {
@@ -45,9 +44,11 @@ type davStorageImpl struct {
 	cli *gowebdav.Client
 }
 
-func (d *davStorageImpl) GetBlobFromPath(ctx context.Context, dirPath, path string, offset, length int64, output blob.OutputBuffer) error {
-	_ = dirPath
+func (d *davStorage) GetCapacity(ctx context.Context) (blob.Capacity, error) {
+	return blob.Capacity{}, blob.ErrNotAVolume
+}
 
+func (d *davStorageImpl) GetBlobFromPath(ctx context.Context, dirPath, path string, offset, length int64, output blob.OutputBuffer) error {
 	output.Reset()
 
 	if offset < 0 {
@@ -87,8 +88,6 @@ func (d *davStorageImpl) GetBlobFromPath(ctx context.Context, dirPath, path stri
 }
 
 func (d *davStorageImpl) GetMetadataFromPath(ctx context.Context, dirPath, path string) (blob.Metadata, error) {
-	_ = dirPath
-
 	fi, err := d.cli.Stat(path)
 	if err != nil {
 		return blob.Metadata{}, d.translateError(err)
@@ -213,8 +212,6 @@ func (d *davStorageImpl) PutBlobInPath(ctx context.Context, dirPath, filePath st
 }
 
 func (d *davStorageImpl) DeleteBlobInPath(ctx context.Context, dirPath, filePath string) error {
-	_ = dirPath
-
 	err := d.translateError(retry.WithExponentialBackoffNoValue(ctx, "DeleteBlobInPath", func() error {
 		//nolint:wrapcheck
 		return d.cli.Remove(filePath)
@@ -236,6 +233,14 @@ func (d *davStorage) ConnectionInfo() blob.ConnectionInfo {
 func (d *davStorage) DisplayName() string {
 	o := d.Storage.Impl.(*davStorageImpl).Options //nolint:forcetypeassert
 	return fmt.Sprintf("WebDAV: %v", o.URL)
+}
+
+func (d *davStorage) Close(ctx context.Context) error {
+	return nil
+}
+
+func (d *davStorage) FlushCaches(ctx context.Context) error {
+	return nil
 }
 
 func isRetriable(err error) bool {
@@ -266,7 +271,7 @@ func New(ctx context.Context, opts *Options, isCreate bool) (blob.Storage, error
 	}
 
 	s := retrying.NewWrapper(&davStorage{
-		Storage: sharded.New(&davStorageImpl{
+		sharded.New(&davStorageImpl{
 			Options: *opts,
 			cli:     cli,
 		}, "", opts.Options, isCreate),

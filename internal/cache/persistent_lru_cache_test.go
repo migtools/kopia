@@ -25,7 +25,7 @@ func TestPersistentLRUCache(t *testing.T) {
 
 	const maxSizeBytes = 1000
 
-	cs := blobtesting.NewMapStorageWithLimit(blobtesting.DataMap{}, nil, nil, maxSizeBytes).(cache.Storage)
+	cs := blobtesting.NewMapStorage(blobtesting.DataMap{}, nil, nil).(cache.Storage)
 
 	pc, err := cache.NewPersistentCache(ctx, "testing", cs, cacheprot.ChecksumProtection([]byte{1, 2, 3}), cache.SweepSettings{
 		MaxSizeBytes:   maxSizeBytes,
@@ -148,13 +148,11 @@ func TestPersistentLRUCache_GetDeletesInvalidBlob(t *testing.T) {
 
 	data := blobtesting.DataMap{}
 
-	const maxSizeBytes = 1000
-
-	st := blobtesting.NewMapStorageWithLimit(data, nil, nil, maxSizeBytes)
+	st := blobtesting.NewMapStorage(data, nil, nil)
 	fs := blobtesting.NewFaultyStorage(st)
 	fc := faultyCache{fs}
 
-	pc, err := cache.NewPersistentCache(ctx, "test", fc, cacheprot.ChecksumProtection([]byte{1, 2, 3}), cache.SweepSettings{MaxSizeBytes: maxSizeBytes}, nil, clock.Now)
+	pc, err := cache.NewPersistentCache(ctx, "test", fc, cacheprot.ChecksumProtection([]byte{1, 2, 3}), cache.SweepSettings{MaxSizeBytes: 100}, nil, clock.Now)
 	require.NoError(t, err)
 
 	pc.Put(ctx, "key", gather.FromSlice([]byte{1, 2, 3}))
@@ -206,19 +204,17 @@ func TestPersistentLRUCache_SweepMinSweepAge(t *testing.T) {
 
 	data := blobtesting.DataMap{}
 
-	const maxSizeBytes = 1000
-
-	st := blobtesting.NewMapStorageWithLimit(data, nil, nil, maxSizeBytes)
+	st := blobtesting.NewMapStorage(data, nil, nil)
 	fs := blobtesting.NewFaultyStorage(st)
 	fc := faultyCache{fs}
 
 	pc, err := cache.NewPersistentCache(ctx, "test", fc, cacheprot.ChecksumProtection([]byte{1, 2, 3}), cache.SweepSettings{
-		MaxSizeBytes: maxSizeBytes,
+		MaxSizeBytes: 1000,
 		MinSweepAge:  10 * time.Second,
 	}, nil, clock.Now)
 	require.NoError(t, err)
 	pc.Put(ctx, "key", gather.FromSlice([]byte{1, 2, 3}))
-	pc.Put(ctx, "key2", gather.FromSlice(bytes.Repeat([]byte{1, 2, 3}, 10)))
+	pc.Put(ctx, "key2", gather.FromSlice(bytes.Repeat([]byte{1, 2, 3}, 1e6)))
 	time.Sleep(1 * time.Second)
 
 	// simulate error during final sweep
@@ -236,14 +232,12 @@ func TestPersistentLRUCache_SweepIgnoresErrors(t *testing.T) {
 
 	data := blobtesting.DataMap{}
 
-	const maxSizeBytes = 1000
-
-	st := blobtesting.NewMapStorageWithLimit(data, nil, nil, maxSizeBytes)
+	st := blobtesting.NewMapStorage(data, nil, nil)
 	fs := blobtesting.NewFaultyStorage(st)
 	fc := faultyCache{fs}
 
 	pc, err := cache.NewPersistentCache(ctx, "test", fc, cacheprot.ChecksumProtection([]byte{1, 2, 3}), cache.SweepSettings{
-		MaxSizeBytes: maxSizeBytes,
+		MaxSizeBytes: 1000,
 	}, nil, clock.Now)
 	require.NoError(t, err)
 
@@ -251,7 +245,7 @@ func TestPersistentLRUCache_SweepIgnoresErrors(t *testing.T) {
 	fs.AddFault(blobtesting.MethodDeleteBlob).ErrorInstead(errors.Errorf("some delete error")).Repeat(1e6)
 
 	pc.Put(ctx, "key", gather.FromSlice([]byte{1, 2, 3}))
-	pc.Put(ctx, "key2", gather.FromSlice(bytes.Repeat([]byte{1, 2, 3}, 10)))
+	pc.Put(ctx, "key2", gather.FromSlice(bytes.Repeat([]byte{1, 2, 3}, 1e6)))
 	time.Sleep(500 * time.Millisecond)
 
 	// simulate error during sweep
@@ -270,14 +264,12 @@ func TestPersistentLRUCache_Sweep1(t *testing.T) {
 
 	data := blobtesting.DataMap{}
 
-	const maxSizeBytes = 1
-
-	st := blobtesting.NewMapStorageWithLimit(data, nil, nil, maxSizeBytes)
+	st := blobtesting.NewMapStorage(data, nil, nil)
 	fs := blobtesting.NewFaultyStorage(st)
 	fc := faultyCache{fs}
 
 	pc, err := cache.NewPersistentCache(ctx, "test", fc, cacheprot.ChecksumProtection([]byte{1, 2, 3}), cache.SweepSettings{
-		MaxSizeBytes: maxSizeBytes,
+		MaxSizeBytes: 1,
 		MinSweepAge:  0 * time.Second,
 	}, nil, clock.Now)
 	require.NoError(t, err)
@@ -298,6 +290,13 @@ func TestPersistentLRUCacheNil(t *testing.T) {
 	// no-op
 	pc.Close(ctx)
 	pc.Put(ctx, "key", gather.FromSlice([]byte{1, 2, 3}))
+
+	m1 := pc.GetFetchingMutex("dummy")
+	m2 := pc.GetFetchingMutex("dummy")
+
+	require.NotNil(t, m1)
+	require.NotNil(t, m2)
+	require.NotSame(t, m1, m2)
 
 	var tmp gather.WriteBuffer
 

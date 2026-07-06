@@ -39,7 +39,6 @@ type commandSnapshotCreate struct {
 	snapshotCreateCheckpointUploadLimitMB int64
 	snapshotCreateTags                    []string
 	flushPerSource                        bool
-	sourceOverride                        string
 
 	pins []string
 
@@ -55,7 +54,7 @@ func (c *commandSnapshotCreate) setup(svc appServices, parent commandParent) {
 	cmd := parent.Command("create", "Creates a snapshot of local directory or file.")
 
 	cmd.Arg("source", "Files or directories to create snapshot(s) of.").StringsVar(&c.snapshotCreateSources)
-	cmd.Flag("all", "Create snapshots for files or directories previously backed up by this user on this computer. Cannot be used when a source path argument is also specified.").BoolVar(&c.snapshotCreateAll)
+	cmd.Flag("all", "Create snapshots for files or directories previously backed up by this user on this computer").BoolVar(&c.snapshotCreateAll)
 	cmd.Flag("upload-limit-mb", "Stop the backup process after the specified amount of data (in MB) has been uploaded.").PlaceHolder("MB").Default("0").Int64Var(&c.snapshotCreateCheckpointUploadLimitMB)
 	cmd.Flag("checkpoint-interval", "Interval between periodic checkpoints (must be <= 45 minutes).").Hidden().DurationVar(&c.snapshotCreateCheckpointInterval)
 	cmd.Flag("description", "Free-form snapshot description.").StringVar(&c.snapshotCreateDescription)
@@ -68,9 +67,8 @@ func (c *commandSnapshotCreate) setup(svc appServices, parent commandParent) {
 	cmd.Flag("force-disable-actions", "Disable snapshot actions even if globally enabled on this client").Hidden().BoolVar(&c.snapshotCreateForceDisableActions)
 	cmd.Flag("stdin-file", "File path to be used for stdin data snapshot.").StringVar(&c.snapshotCreateStdinFileName)
 	cmd.Flag("tags", "Tags applied on the snapshot. Must be provided in the <key>:<value> format.").StringsVar(&c.snapshotCreateTags)
-	cmd.Flag("pin", "Create a pinned snapshot that will not expire automatically").StringsVar(&c.pins)
+	cmd.Flag("pin", "Create a pinned snapshot that's will not expire automatically").StringsVar(&c.pins)
 	cmd.Flag("flush-per-source", "Flush writes at the end of each source").Hidden().BoolVar(&c.flushPerSource)
-	cmd.Flag("override-source", "Override the source of the snapshot.").StringVar(&c.sourceOverride)
 
 	c.logDirDetail = -1
 	c.logEntryDetail = -1
@@ -88,10 +86,6 @@ func (c *commandSnapshotCreate) setup(svc appServices, parent commandParent) {
 //nolint:gocyclo
 func (c *commandSnapshotCreate) run(ctx context.Context, rep repo.RepositoryWriter) error {
 	sources := c.snapshotCreateSources
-
-	if c.snapshotCreateAll && len(sources) > 0 {
-		return errors.New("cannot use --all when a source path argument is specified")
-	}
 
 	if err := maybeAutoUpgradeRepository(ctx, rep); err != nil {
 		return errors.Wrap(err, "error upgrading repository")
@@ -133,12 +127,19 @@ func (c *commandSnapshotCreate) run(ctx context.Context, rep repo.RepositoryWrit
 			break
 		}
 
-		fsEntry, sourceInfo, setManual, err := c.getContentToSnapshot(ctx, snapshotDir, rep)
+		dir, err := filepath.Abs(snapshotDir)
 		if err != nil {
-			finalErrors = append(finalErrors, fmt.Sprintf("failed to prepare source: %s", err))
+			finalErrors = append(finalErrors, fmt.Sprintf("invalid source: '%s': %s", snapshotDir, err))
+			continue
 		}
 
-		if err := c.snapshotSingleSource(ctx, fsEntry, setManual, rep, u, sourceInfo, tags); err != nil {
+		sourceInfo := snapshot.SourceInfo{
+			Path:     filepath.Clean(dir),
+			Host:     rep.ClientOptions().Hostname,
+			UserName: rep.ClientOptions().Username,
+		}
+
+		if err := c.snapshotSingleSource(ctx, rep, u, sourceInfo, tags); err != nil {
 			finalErrors = append(finalErrors, err.Error())
 		}
 	}
@@ -260,10 +261,28 @@ func startTimeAfterEndTime(startTime, endTime time.Time) bool {
 }
 
 //nolint:gocyclo
-func (c *commandSnapshotCreate) snapshotSingleSource(ctx context.Context, fsEntry fs.Entry, setManual bool, rep repo.RepositoryWriter, u *snapshotfs.Uploader, sourceInfo snapshot.SourceInfo, tags map[string]string) error {
+func (c *commandSnapshotCreate) snapshotSingleSource(ctx context.Context, rep repo.RepositoryWriter, u *snapshotfs.Uploader, sourceInfo snapshot.SourceInfo, tags map[string]string) error {
 	log(ctx).Infof("Snapshotting %v ...", sourceInfo)
 
-	var err error
+	var (
+		err       error
+		fsEntry   fs.Entry
+		setManual bool
+	)
+
+	if c.snapshotCreateStdinFileName != "" {
+		// stdin source will be snapshotted using a virtual static root directory with a single streaming file entry
+		// Create a new static directory with the given name and add a streaming file entry with os.Stdin reader
+		fsEntry = virtualfs.NewStaticDirectory(sourceInfo.Path, []fs.Entry{
+			virtualfs.StreamingFileFromReader(c.snapshotCreateStdinFileName, io.NopCloser(c.svc.stdin())),
+		})
+		setManual = true
+	} else {
+		fsEntry, err = getLocalFSEntry(ctx, sourceInfo.Path)
+		if err != nil {
+			return errors.Wrap(err, "unable to get local filesystem entry")
+		}
+	}
 
 	previous, err := findPreviousSnapshotManifest(ctx, rep, sourceInfo, nil)
 	if err != nil {
@@ -353,9 +372,10 @@ func (c *commandSnapshotCreate) reportSnapshotStatus(ctx context.Context, manife
 
 	if c.jo.jsonOutput {
 		c.out.printStdout("%s\n", c.jo.jsonIndentedBytes(manifest, "  "))
-	} else {
-		log(ctx).Infof("Created%v snapshot with root %v and ID %v in %v", maybePartial, manifest.RootObjectID(), snapID, manifest.EndTime.Sub(manifest.StartTime).Truncate(time.Second))
+		return nil
 	}
+
+	log(ctx).Infof("Created%v snapshot with root %v and ID %v in %v", maybePartial, manifest.RootObjectID(), snapID, manifest.EndTime.Sub(manifest.StartTime).Truncate(time.Second))
 
 	if ds := manifest.RootEntry.DirSummary; ds != nil {
 		if ds.IgnoredErrorCount > 0 {
@@ -449,59 +469,4 @@ func shouldSnapshotSource(ctx context.Context, src snapshot.SourceInfo, rep repo
 	return src.Host == rep.ClientOptions().Hostname &&
 		src.UserName == rep.ClientOptions().Username &&
 		!policy.IsManualSnapshot(policyTree), nil
-}
-
-// the setManual return value is true when a snapshot is manually created, such
-// as when overriding the source info or snapshotting from stdin.
-func (c *commandSnapshotCreate) getContentToSnapshot(ctx context.Context, dir string, rep repo.RepositoryWriter) (fsEntry fs.Entry, info snapshot.SourceInfo, setManual bool, err error) {
-	var absDir string
-
-	absDir, err = filepath.Abs(dir)
-	if err != nil {
-		return nil, info, false, errors.Wrapf(err, "invalid source %v", dir)
-	}
-
-	if c.sourceOverride != "" {
-		info, err = parseFullSource(c.sourceOverride, rep.ClientOptions().Hostname, rep.ClientOptions().Username)
-
-		if err != nil {
-			return nil, info, false, errors.Wrapf(err, "invalid source override %v", c.sourceOverride)
-		}
-
-		setManual = true
-	} else {
-		info = snapshot.SourceInfo{
-			Path:     filepath.Clean(absDir),
-			Host:     rep.ClientOptions().Hostname,
-			UserName: rep.ClientOptions().Username,
-		}
-	}
-
-	if c.snapshotCreateStdinFileName != "" {
-		// stdin source will be snapshotted using a virtual static root directory with a single streaming file entry
-		// Create a new static directory with the given name and add a streaming file entry with os.Stdin reader
-		fsEntry = virtualfs.NewStaticDirectory(absDir, []fs.Entry{
-			virtualfs.StreamingFileFromReader(c.snapshotCreateStdinFileName, io.NopCloser(c.svc.stdin())),
-		})
-		setManual = true
-	} else {
-		fsEntry, err = getLocalFSEntry(ctx, absDir)
-		if err != nil {
-			return nil, info, false, errors.Wrap(err, "unable to get local filesystem entry")
-		}
-	}
-
-	return fsEntry, info, setManual, nil
-}
-
-func parseFullSource(str, hostname, username string) (snapshot.SourceInfo, error) {
-	sourceInfo, err := snapshot.ParseSourceInfo(str, hostname, username)
-
-	if err != nil {
-		return snapshot.SourceInfo{}, errors.Wrapf(err, "not a valid source %v", str)
-	} else if sourceInfo.Host == "" || sourceInfo.UserName == "" || sourceInfo.Path == "" {
-		return snapshot.SourceInfo{}, errors.Errorf("source does not resolve into host, user and path: '%s'", str)
-	}
-
-	return sourceInfo, nil
 }

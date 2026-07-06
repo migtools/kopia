@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -21,15 +22,11 @@ import (
 )
 
 const (
+	statusRefreshInterval       = 30 * time.Minute
 	failedSnapshotRetryInterval = 5 * time.Minute
 	refreshTimeout              = 30 * time.Second // max amount of time to refresh a single source
 	oneDay                      = 24 * time.Hour
 )
-
-type sourceManagerServerInterface interface {
-	runSnapshotTask(ctx context.Context, src snapshot.SourceInfo, inner func(ctx context.Context, ctrl uitask.Controller) error) error
-	refreshScheduler(reason string)
-}
 
 // sourceManager manages the state machine of each source
 // Possible states:
@@ -42,12 +39,13 @@ type sourceManagerServerInterface interface {
 type sourceManager struct {
 	snapshotfs.NullUploadProgress
 
-	server sourceManagerServerInterface
+	server *Server
 
 	src              snapshot.SourceInfo
 	rep              repo.Repository
 	closed           chan struct{}
 	snapshotRequests chan struct{}
+	refreshRequested chan struct{} // tickled externally to trigger refresh
 	wg               sync.WaitGroup
 
 	sourceMutex sync.RWMutex
@@ -152,8 +150,9 @@ func (s *sourceManager) setUploader(u *snapshotfs.Uploader) {
 	s.uploader = u
 }
 
-func (s *sourceManager) start(ctx context.Context, isLocal bool) {
-	s.refreshStatus(ctx)
+func (s *sourceManager) start(ctx context.Context, rep repo.Repository) {
+	isLocal := rep.ClientOptions().Hostname == s.src.Host && !rep.ClientOptions().ReadOnly
+
 	go s.run(ctx, isLocal)
 }
 
@@ -168,43 +167,58 @@ func (s *sourceManager) run(ctx context.Context, isLocal bool) {
 	defer s.wg.Done()
 
 	if isLocal {
+		log(ctx).Debugf("starting local source manager for %v", s.src)
 		s.runLocal(ctx)
 	} else {
-		s.runReadOnly()
+		log(ctx).Debugf("starting read-only source manager for %v", s.src)
+		s.runReadOnly(ctx)
 	}
 }
 
 func (s *sourceManager) runLocal(ctx context.Context) {
-	if s.isPaused() {
-		s.setStatus("PAUSED")
-	} else {
-		s.setStatus("IDLE")
-	}
+	s.refreshStatus(ctx)
 
 	for {
+		var waitTime time.Duration
+
+		nst, ok := s.getNextSnapshotTime()
+		if ok {
+			waitTime = nst.Sub(clock.Now())
+		} else {
+			waitTime = oneDay
+		}
+
+		if s.isPaused() {
+			s.setStatus("PAUSED")
+		} else {
+			s.setStatus("IDLE")
+		}
+
 		select {
 		case <-s.closed:
 			return
 
 		case <-s.snapshotRequests:
-			if s.isPaused() {
-				s.setStatus("PAUSED")
+			s.setNextSnapshotTime(clock.Now())
+
+			continue
+
+		case <-s.refreshRequested:
+			s.refreshStatus(ctx)
+			continue
+
+		case <-time.After(statusRefreshInterval):
+			s.refreshStatus(ctx)
+
+		case <-time.After(waitTime):
+			log(ctx).Debugf("snapshotting %v", s.src)
+
+			if err := s.snapshot(ctx); err != nil {
+				log(ctx).Errorf("snapshot error: %v", err)
+
+				s.backoffBeforeNextSnapshot()
 			} else {
-				s.setStatus("PENDING")
-
-				log(ctx).Debugw("snapshotting", "source", s.src)
-
-				if err := s.server.runSnapshotTask(ctx, s.src, s.snapshotInternal); err != nil {
-					log(ctx).Errorf("snapshot error: %v", err)
-
-					s.backoffBeforeNextSnapshot()
-				} else {
-					s.refreshStatus(ctx)
-				}
-
-				s.server.refreshScheduler("snapshot finished")
-
-				s.setStatus("IDLE")
+				s.refreshStatus(ctx)
 			}
 		}
 	}
@@ -218,21 +232,22 @@ func (s *sourceManager) backoffBeforeNextSnapshot() {
 	s.setNextSnapshotTime(clock.Now().Add(failedSnapshotRetryInterval))
 }
 
-func (s *sourceManager) runReadOnly() {
+func (s *sourceManager) runReadOnly(ctx context.Context) {
 	s.isReadOnly = true
+	s.refreshStatus(ctx)
 	s.setStatus("REMOTE")
 
-	// wait until closed
-	<-s.closed
+	for {
+		select {
+		case <-s.closed:
+			return
+		case <-time.After(statusRefreshInterval):
+			s.refreshStatus(ctx)
+		}
+	}
 }
 
 func (s *sourceManager) scheduleSnapshotNow() {
-	s.sourceMutex.Lock()
-	defer s.sourceMutex.Unlock()
-
-	// next snapshot time will be recalculated by refreshStatus()
-	s.nextSnapshotTime = nil
-
 	select {
 	case s.snapshotRequests <- struct{}{}: // scheduled snapshot
 	default: // already scheduled
@@ -267,9 +282,12 @@ func (s *sourceManager) pause(ctx context.Context) serverapi.SourceActionRespons
 	if u := s.currentUploader(); u != nil {
 		log(ctx).Infof("canceling current upload")
 		u.Cancel()
+	} else {
+		select {
+		case s.refreshRequested <- struct{}{}:
+		default:
+		}
 	}
-
-	s.server.refreshScheduler("source paused")
 
 	return serverapi.SourceActionResponse{Success: true}
 }
@@ -281,22 +299,44 @@ func (s *sourceManager) resume(ctx context.Context) serverapi.SourceActionRespon
 	s.paused = false
 	s.sourceMutex.Unlock()
 
-	s.server.refreshScheduler("source unpaused")
+	select {
+	case s.refreshRequested <- struct{}{}:
+	default:
+	}
 
 	return serverapi.SourceActionResponse{Success: true}
 }
 
 func (s *sourceManager) stop(ctx context.Context) {
+	log(ctx).Debugf("stopping source manager for %v", s.src)
+
 	if u := s.currentUploader(); u != nil {
-		log(ctx).Infow("canceling current upload", "src", s.src)
+		log(ctx).Infof("canceling current upload")
 		u.Cancel()
 	}
 
 	close(s.closed)
 }
 
-func (s *sourceManager) waitUntilStopped() {
+func (s *sourceManager) waitUntilStopped(ctx context.Context) {
 	s.wg.Wait()
+	log(ctx).Debugf("source manager for %v has stopped", s.src)
+}
+
+func (s *sourceManager) snapshot(ctx context.Context) error {
+	s.setStatus("PENDING")
+
+	if !s.server.beginUpload(ctx, s.src) {
+		return nil
+	}
+
+	defer s.server.endUpload(ctx, s.src)
+
+	//nolint:wrapcheck
+	return s.server.taskmgr.Run(ctx,
+		"Snapshot",
+		fmt.Sprintf("%v at %v", s.src, clock.Now().Format(time.RFC3339)),
+		s.snapshotInternal)
 }
 
 func (s *sourceManager) snapshotInternal(ctx context.Context, ctrl uitask.Controller) error {
@@ -570,6 +610,7 @@ func newSourceManager(src snapshot.SourceInfo, server *Server, rep repo.Reposito
 		state:            "UNKNOWN",
 		closed:           make(chan struct{}),
 		snapshotRequests: make(chan struct{}, 1),
+		refreshRequested: make(chan struct{}, 1),
 		progress:         &snapshotfs.CountingUploadProgress{},
 	}
 

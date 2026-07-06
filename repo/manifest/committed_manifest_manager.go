@@ -33,11 +33,6 @@ type committedManifestManager struct {
 	committedEntries map[ID]*manifestEntry
 	// +checklocks:cmmu
 	committedContentIDs map[content.ID]bool
-
-	// autoCompactionThreshold controls the threshold after which the manager auto-compacts
-	// manifest contents
-	// +checklocks:cmmu
-	autoCompactionThreshold int
 }
 
 func (m *committedManifestManager) getCommittedEntryOrNil(ctx context.Context, id ID) (*manifestEntry, error) {
@@ -221,9 +216,7 @@ func (m *committedManifestManager) compact(ctx context.Context) error {
 func (m *committedManifestManager) maybeCompactLocked(ctx context.Context) error {
 	m.verifyLocked()
 
-	// Don't attempt to compact manifests if the repo was opened in read only mode
-	// since we'll just end up failing.
-	if m.b.IsReadOnly() || len(m.committedContentIDs) < m.autoCompactionThreshold {
+	if len(m.committedContentIDs) < autoCompactionContentCount {
 		return nil
 	}
 
@@ -362,17 +355,16 @@ func loadManifestContent(ctx context.Context, b contentManager, contentID conten
 	return man, errors.Wrapf(err, "unable to parse manifest %q", contentID)
 }
 
-func newCommittedManager(b contentManager, autoCompactionThreshold int) *committedManifestManager {
+func newCommittedManager(b contentManager) *committedManifestManager {
 	debugID := ""
 	if os.Getenv("KOPIA_DEBUG_MANIFEST_MANAGER") != "" {
 		debugID = fmt.Sprintf("%x", rand.Int63()) //nolint:gosec
 	}
 
 	return &committedManifestManager{
-		b:                       b,
-		debugID:                 debugID,
-		committedEntries:        map[ID]*manifestEntry{},
-		committedContentIDs:     map[content.ID]bool{},
-		autoCompactionThreshold: autoCompactionThreshold,
+		b:                   b,
+		debugID:             debugID,
+		committedEntries:    map[ID]*manifestEntry{},
+		committedContentIDs: map[content.ID]bool{},
 	}
 }

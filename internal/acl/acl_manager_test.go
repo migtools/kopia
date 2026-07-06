@@ -175,7 +175,7 @@ func TestLoadEntries(t *testing.T) {
 		Access: acl.AccessLevelFull,
 	}
 
-	require.NoError(t, acl.AddACL(ctx, env.RepositoryWriter, e1, false))
+	require.NoError(t, acl.AddACL(ctx, env.RepositoryWriter, e1))
 
 	entries, err = acl.LoadEntries(ctx, env.RepositoryWriter, entries)
 	require.NoError(t, err)
@@ -192,7 +192,7 @@ func TestLoadEntries(t *testing.T) {
 		Access: acl.AccessLevelFull,
 	}
 
-	require.NoError(t, acl.AddACL(ctx, env.RepositoryWriter, e2, false))
+	require.NoError(t, acl.AddACL(ctx, env.RepositoryWriter, e2))
 
 	entries, err = acl.LoadEntries(ctx, env.RepositoryWriter, entries)
 	require.NoError(t, err)

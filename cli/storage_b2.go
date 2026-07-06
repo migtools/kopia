@@ -22,8 +22,6 @@ func (c *storageB2Flags) Setup(svc StorageProviderServices, cmd *kingpin.CmdClau
 }
 
 func (c *storageB2Flags) Connect(ctx context.Context, isCreate bool, formatVersion int) (blob.Storage, error) {
-	_ = formatVersion
-
 	//nolint:wrapcheck
-	return b2.New(ctx, &c.b2options, isCreate)
+	return b2.New(ctx, &c.b2options, false)
 }

@@ -105,11 +105,11 @@ func WithExponentialBackoffNoValue(ctx context.Context, desc string, attempt fun
 }
 
 // Always is a retry function that retries all errors.
-func Always(error) bool {
+func Always(err error) bool {
 	return true
 }
 
 // Never is a retry function that never retries.
-func Never(error) bool {
+func Never(err error) bool {
 	return false
 }

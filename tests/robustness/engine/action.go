@@ -78,14 +78,12 @@ func (e *Engine) RandomAction(ctx context.Context, actionOpts ActionOpts) error 
 	}
 
 	_, err := e.ExecAction(ctx, actionName, actionOpts[actionName])
-	err = e.CheckErrRecovery(ctx, err, actionOpts)
+	err = e.checkErrRecovery(ctx, err, actionOpts)
 
 	return err
 }
 
-// CheckErrRecovery tries to recover from no space left error
-// by deleting data directories.
-func (e *Engine) CheckErrRecovery(ctx context.Context, incomingErr error, actionOpts ActionOpts) (outgoingErr error) {
+func (e *Engine) checkErrRecovery(ctx context.Context, incomingErr error, actionOpts ActionOpts) (outgoingErr error) {
 	outgoingErr = incomingErr
 
 	if incomingErr == nil {

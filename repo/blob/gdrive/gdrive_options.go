@@ -15,7 +15,7 @@ type Options struct {
 	ServiceAccountCredentialsFile string `json:"credentialsFile,omitempty"`
 
 	// ServiceAccountCredentialJSON specifies the raw JSON credentials.
-	ServiceAccountCredentialJSON json.RawMessage `json:"credentials,omitempty" kopia:"sensitive"`
+	ServiceAccountCredentialJSON json.RawMessage `kopia:"sensitive" json:"credentials,omitempty"`
 
 	// ReadOnly causes GCS connection to be opened with read-only scope to prevent accidental mutations.
 	ReadOnly bool `json:"readOnly,omitempty"`

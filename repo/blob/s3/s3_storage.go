@@ -30,11 +30,14 @@ const (
 
 type s3Storage struct {
 	Options
-	blob.DefaultProviderImplementation
 
 	cli *minio.Client
 
 	storageConfig *StorageConfig
+}
+
+func (s *s3Storage) GetCapacity(ctx context.Context) (blob.Capacity, error) {
+	return blob.Capacity{}, blob.ErrNotAVolume
 }
 
 func (s *s3Storage) GetBlob(ctx context.Context, b blob.ID, offset, length int64, output blob.OutputBuffer) error {
@@ -228,25 +231,6 @@ func (s *s3Storage) DeleteBlob(ctx context.Context, b blob.ID) error {
 	return err
 }
 
-func (s *s3Storage) ExtendBlobRetention(ctx context.Context, b blob.ID, opts blob.ExtendOptions) error {
-	retentionMode := minio.RetentionMode(opts.RetentionMode)
-	if !retentionMode.IsValid() {
-		return errors.Errorf("invalid retention mode: %q", opts.RetentionMode)
-	}
-
-	retainUntilDate := clock.Now().Add(opts.RetentionPeriod).UTC()
-
-	err := s.cli.PutObjectRetention(ctx, s.BucketName, s.getObjectNameString(b), minio.PutObjectRetentionOptions{
-		RetainUntilDate: &retainUntilDate,
-		Mode:            &retentionMode,
-	})
-	if err != nil {
-		return errors.Wrap(err, "unable to extend retention period")
-	}
-
-	return nil
-}
-
 func (s *s3Storage) getObjectNameString(b blob.ID) string {
 	return s.Prefix + string(b)
 }
@@ -293,12 +277,20 @@ func (s *s3Storage) ConnectionInfo() blob.ConnectionInfo {
 	}
 }
 
+func (s *s3Storage) Close(ctx context.Context) error {
+	return nil
+}
+
 func (s *s3Storage) String() string {
 	return fmt.Sprintf("s3://%v/%v", s.BucketName, s.Prefix)
 }
 
 func (s *s3Storage) DisplayName() string {
 	return fmt.Sprintf("S3: %v %v", s.Endpoint, s.BucketName)
+}
+
+func (s *s3Storage) FlushCaches(ctx context.Context) error {
+	return nil
 }
 
 func getCustomTransport(opt *Options) (*http.Transport, error) {
@@ -326,8 +318,6 @@ func getCustomTransport(opt *Options) (*http.Transport, error) {
 //
 // - the 'BucketName' field is required and all other parameters are optional.
 func New(ctx context.Context, opt *Options, isCreate bool) (blob.Storage, error) {
-	_ = isCreate
-
 	st, err := newStorage(ctx, opt)
 	if err != nil {
 		return nil, err

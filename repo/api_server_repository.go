@@ -110,7 +110,6 @@ func (r *apiServerRepository) ReplaceManifests(ctx context.Context, labels map[s
 }
 
 func (r *apiServerRepository) SetFindManifestPageSizeForTesting(v int32) {
-	_ = v
 }
 
 func (r *apiServerRepository) FindManifests(ctx context.Context, labels map[string]string) ([]*manifest.EntryMetadata, error) {
@@ -280,19 +279,6 @@ func (r *apiServerRepository) PrefetchContents(ctx context.Context, contentIDs [
 	}
 
 	return resp.ContentIDs
-}
-
-func (r *apiServerRepository) ApplyRetentionPolicy(ctx context.Context, sourcePath string, reallyDelete bool) ([]manifest.ID, error) {
-	var result remoterepoapi.ApplyRetentionPolicyResponse
-
-	if err := r.cli.Post(ctx, "policies/apply-retention", remoterepoapi.ApplyRetentionPolicyRequest{
-		SourcePath:   sourcePath,
-		ReallyDelete: reallyDelete,
-	}, &result); err != nil {
-		return nil, errors.Wrap(err, "unable to apply retention policy")
-	}
-
-	return result.ManifestIDs, nil
 }
 
 // OnSuccessfulFlush registers the provided callback to be invoked after flush succeeds.

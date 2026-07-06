@@ -1,159 +1,113 @@
-const { app, BrowserWindow, Notification, screen, Menu, Tray, ipcMain, dialog, shell } = require('electron')
+const { app, BrowserWindow, Notification, Menu, Tray, ipcMain, dialog, shell } = require('electron')
+const path = require('path');
+const isDev = require('electron-is-dev');
 const { autoUpdater } = require("electron-updater");
 const { resourcesPath, selectByOS } = require('./utils');
 const { toggleLaunchAtStartup, willLaunchAtStartup, refreshWillLaunchAtStartup } = require('./auto-launch');
 const { serverForRepo } = require('./server');
-const { loadConfigs, allConfigs, deleteConfigIfDisconnected, addNewConfig, configDir, isFirstRun, isPortableConfig } = require('./config');
-const Store = require('electron-store')
 const log = require("electron-log");
-const path = require('path');
-const isDev = require('electron-is-dev');
-
-// Store to save parameters
-const store = new Store();
+const { loadConfigs, allConfigs, deleteConfigIfDisconnected, addNewConfig, configDir, isFirstRun, isPortableConfig } = require('./config');
 
 app.name = 'KopiaUI';
-
-let tray = null
-let repositoryWindows = {};
-let repoIDForWebContents = {};
 
 if (isPortableConfig()) {
   // in portable mode, write cache under 'repositories'
   app.setPath('userData', path.join(configDir(), 'cache'));
 }
 
-function showRepoWindow(repositoryID) {
-  if (repositoryWindows[repositoryID]) {
-    repositoryWindows[repositoryID].focus();
+let tray = null
+let repoWindows = {};
+let repoIDForWebContents = {};
+
+function showRepoWindow(repoID) {
+  if (repoWindows[repoID]) {
+    repoWindows[repoID].focus();
     return;
   }
 
-  let windowOptions = {
-    title: 'KopiaUI is Loading...',
-
-    // default width
+  let rw = new BrowserWindow({
     width: 1000,
-    // default height
     height: 700,
-
+    title: 'KopiaUI is Loading...',
     autoHideMenuBar: true,
-    resizable: true,
     webPreferences: {
       preload: path.join(resourcesPath(), 'preload.js'),
     },
-  };
+  })
 
+  repoWindows[repoID] = rw
 
-  // Workaround until https://github.com/electron/electron/issues/10862 is fixed
-  // Get all displays
-  let displays = screen.getAllDisplays()
-  // There should be only one primary display
-  let prevFactor = screen.getPrimaryDisplay().scaleFactor
-  // True if all factors are equal, false else
-  let isFactorEqual = true
+  const wcID = rw.webContents.id;
+  repoIDForWebContents[wcID] = repoID
 
-  if (displays.length > 0) {
-    for (let d in displays) {
-      let factor = displays[d].scaleFactor
-      if (prevFactor != factor) {
-        isFactorEqual = false
-        break
-      }
-      prevFactor = factor
-    }
-  }
-
-  // Assign the bounds if all factors are equal, else revert to defaults
-  if (isFactorEqual) {
-    Object.assign(windowOptions, store.get('winBounds'));
-    Object.assign(windowOptions, store.get('maximized'))
-  }
-  
-  let repositoryWindow = new BrowserWindow(windowOptions)
-  const webContentsID = repositoryWindow.webContents.id;
-
-  repositoryWindows[repositoryID] = repositoryWindow
-  repoIDForWebContents[webContentsID] = repositoryID
-
-  // Failed to load the content, retry 
-  repositoryWindow.webContents.on('did-fail-load', () => {
-    log.error('failed to load content');
+  rw.webContents.on('did-fail-load', () => {
+    log.error('failed to load');
 
     // schedule another attempt in 0.5s
-    if (repositoryWindows[repositoryID]) {
+    if (repoWindows[repoID]) {
       setTimeout(() => {
         log.info('reloading');
-        repositoryWindows[repositoryID].loadURL(serverForRepo(repositoryID).getServerAddress() + '/?ts=' + new Date().valueOf());
+        if (repoWindows[repoID]) {
+          repoWindows[repoID].loadURL(serverForRepo(repoID).getServerAddress() + '/?ts=' + new Date().valueOf());
+        }
       }, 500)
     }
   })
 
-  repositoryWindow.loadURL(serverForRepo(repositoryID).getServerAddress() + '/?ts=' + new Date().valueOf());
+  rw.loadURL(serverForRepo(repoID).getServerAddress() + '/?ts=' + new Date().valueOf());
   updateDockIcon();
 
-  /**
-   * Store the window size, height and position on close
-   */
-  repositoryWindow.on('close', function () {
-    store.set('winBounds', repositoryWindow.getBounds())
-    store.set('maximized', repositoryWindow.isMaximized())
-  });
+  rw.on('closed', function () {
+    // forget the reference.
+    rw = null;
+    delete (repoWindows[repoID]);
+    delete (repoIDForWebContents[wcID]);
 
-  /**
-   * Delete references to the repository window
-   */
-  repositoryWindow.on('closed', function () {
-    // Delete the reference to the window
-    repositoryWindow = null;
-    delete (repositoryWindows[repositoryID]);
-    delete (repoIDForWebContents[webContentsID]);
-
-    const s = serverForRepo(repositoryID);
-    if (deleteConfigIfDisconnected(repositoryID)) {
+    const s = serverForRepo(repoID);
+    if (deleteConfigIfDisconnected(repoID)) {
       s.stopServer();
     }
 
     updateDockIcon();
-  })
+  });
 }
 
-// Check if another instance of kopia is running
 if (!app.requestSingleInstanceLock()) {
   app.quit()
 } else {
-  app.on('second-instance', (_event, _commandLine, _workingDirectory) => {
+  app.on('second-instance', (event, commandLine, workingDirectory) => {
     // Someone tried to run a second instance, we should focus our window.
-    for (let repositoryID in repositoryWindows) {
-      let rw = repositoryWindows[repositoryID];
+    for (let repoID in repoWindows) {
+      let rw = repoWindows[repoID];
       if (rw.isMinimized()) {
         rw.restore()
       }
+
       rw.focus()
     }
   })
 }
 
 app.on('will-quit', function () {
-  allConfigs().forEach(repositoryID => serverForRepo(repositoryID).stopServer());
+  allConfigs().forEach(v => serverForRepo(v).stopServer());
 });
 
-app.on('login', (event, webContents, _request, _authInfo, callback) => {
-  const repositoryID = repoIDForWebContents[webContents.id];
+app.on('login', (event, webContents, request, authInfo, callback) => {
+  const repoID = repoIDForWebContents[webContents.id];
 
   // intercept password prompts and automatically enter password that the server has printed for us.
-  const password = serverForRepo(repositoryID).getServerPassword();
-  if (password) {
+  const p = serverForRepo(repoID).getServerPassword();
+  if (p) {
     event.preventDefault();
     log.info('automatically logging in...');
-    callback('kopia', password);
+    callback('kopia', p);
   }
 });
 
-app.on('certificate-error', (event, webContents, _url, _error, certificate, callback) => {
-  const repositoryID = repoIDForWebContents[webContents.id];
+app.on('certificate-error', (event, webContents, url, error, certificate, callback) => {
+  const repoID = repoIDForWebContents[webContents.id];
   // intercept certificate errors and automatically trust the certificate the server has printed for us.
-  const expected = 'sha256/' + Buffer.from(serverForRepo(repositoryID).getServerCertSHA256(), 'hex').toString('base64');
+  const expected = 'sha256/' + Buffer.from(serverForRepo(repoID).getServerCertSHA256(), 'hex').toString('base64');
   if (certificate.fingerprint === expected) {
     log.debug('accepting server certificate.');
 
@@ -167,12 +121,10 @@ app.on('certificate-error', (event, webContents, _url, _error, certificate, call
   log.warn('certificate error:', certificate.fingerprint, expected);
 });
 
-/**
- * Ignore to let the application run, when all windows are closed 
- */ 
+// Ignore
 app.on('window-all-closed', function () { })
 
-ipcMain.handle('select-dir', async (_event, _arg) => {
+ipcMain.handle('select-dir', async (event, arg) => {
   const result = await dialog.showOpenDialog({
     properties: ['openDirectory']
   });
@@ -182,10 +134,6 @@ ipcMain.handle('select-dir', async (_event, _arg) => {
   } else {
     return null;
   };
-})
-
-ipcMain.handle('browse-dir', async (_event, path) => {
-  shell.openPath(path);
 })
 
 ipcMain.on('server-status-updated', updateTrayContextMenu);
@@ -215,7 +163,7 @@ autoUpdater.on('update-available', a => {
 
   // do not notify more than once for a particular version.
   if (checkForUpdatesTriggeredFromUI) {
-    dialog.showMessageBox({ buttons: ["Yes", "No"], message: "An updated KopiaUI v" + a.version + " is available.\n\nDo you want to install it now?" }).then(r => {
+    dialog.showMessageBox({buttons:["Yes", "No"], message: "An updated KopiaUI v" + a.version + " is available.\n\nDo you want to install it now?"}).then(r => {
       if (r.response == 0) {
         installUpdate();
       }
@@ -226,13 +174,13 @@ autoUpdater.on('update-available', a => {
   if (lastNotifiedVersion != a.version) {
     lastNotifiedVersion = a.version;
 
-    const notification = new Notification({
+    const n = new Notification({
       title: "New version of KopiaUI",
       body: "Version v" + a.version + " is available.\n\nClick here to download and install it.",
     });
 
-    notification.on('click', () => installUpdate());
-    notification.show();
+    n.on('click', () => installUpdate());
+    n.show();
   }
 })
 
@@ -242,7 +190,7 @@ autoUpdater.on('update-not-available', () => {
   updateFailed = false;
   updateTrayContextMenu();
   if (checkForUpdatesTriggeredFromUI) {
-    dialog.showMessageBox({ buttons: ["OK"], message: "No updates available." });
+    dialog.showMessageBox({buttons:["OK"], message: "No updates available."});
     checkForUpdatesTriggeredFromUI = false;
   }
 })
@@ -254,7 +202,7 @@ autoUpdater.on('download-progress', progress => {
   }
 });
 
-autoUpdater.on('update-downloaded', _info => {
+autoUpdater.on('update-downloaded', info => {
   updateDownloadStatusInfo = "Installing Update: v" + updateAvailableInfo.version + " ...";
   updateTrayContextMenu();
 
@@ -273,6 +221,7 @@ autoUpdater.on('update-downloaded', _info => {
 
 autoUpdater.on('error', a => {
   updateAvailableInfo = null;
+  updateError = true;
   updateDownloadStatusInfo = "Error checking for updates.";
   log.info('error checking for updates', a);
   updateTrayContextMenu();
@@ -345,7 +294,7 @@ function maybeMoveToApplicationsFolder() {
 function updateDockIcon() {
   if (process.platform === 'darwin') {
     let any = false
-    for (const _k in repositoryWindows) {
+    for (const k in repoWindows) {
       any = true;
     }
     if (any) {
@@ -356,9 +305,6 @@ function updateDockIcon() {
   }
 }
 
-/**
- * Show all repository windows at once
- */
 function showAllRepoWindows() {
   allConfigs().forEach(showRepoWindow);
 }
@@ -391,7 +337,7 @@ app.on('ready', () => {
   tray = new Tray(
     path.join(
       resourcesPath(), 'icons',
-      selectByOS({ mac: 'kopiaTrayTemplate.png', win: 'kopia-tray.ico', linux: 'kopia-tray.png' })));
+      selectByOS({ mac: 'kopia-tray.png', win: 'kopia-tray.ico', linux: 'kopia-tray.png' })));
 
   tray.setToolTip('Kopia');
 
@@ -485,7 +431,7 @@ function updateTrayContextMenu() {
   let autoUpdateMenuItems = [];
 
   if (updateDownloadStatusInfo) {
-    autoUpdateMenuItems.push({ label: updateDownloadStatusInfo, enabled: false });
+    autoUpdateMenuItems.push({ label: updateDownloadStatusInfo, enabled: false});
   } else if (updateAvailableInfo) {
     if (updateFailed) {
       autoUpdateMenuItems.push({ label: 'Update Failed, click to manually download and install v' + updateAvailableInfo.version, click: viewReleaseNotes });

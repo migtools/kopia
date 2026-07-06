@@ -66,12 +66,6 @@ func (c *commandMaintenanceInfo) run(ctx context.Context, rep repo.DirectReposit
 	c.out.printStdout("  max age of logs: %v\n", cl.MaxAge)
 	c.out.printStdout("  max total size:  %v\n", units.BytesString(cl.MaxTotalSize))
 
-	if p.ExtendObjectLocks {
-		c.out.printStdout("Object Lock Extension: enabled\n")
-	} else {
-		c.out.printStdout("Object Lock Extension: disabled\n")
-	}
-
 	c.out.printStdout("Recent Maintenance Runs:\n")
 
 	for run, timings := range s.Runs {

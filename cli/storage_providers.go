@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"io"
 
 	"github.com/alecthomas/kingpin/v2"
 
@@ -16,7 +15,6 @@ type StorageProviderServices interface {
 	EnvName(s string) string
 	setPasswordFromToken(pwd string)
 	storageProviders() []StorageProvider
-	stdin() io.Reader
 }
 
 // StorageFlags is implemented by cli storage providers which need to support a

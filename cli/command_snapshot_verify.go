@@ -69,7 +69,6 @@ func (c *commandSnapshotVerify) run(ctx context.Context, rep repo.Repository) er
 	}
 
 	v := snapshotfs.NewVerifier(ctx, rep, opts)
-	defer v.ShowFinalStats(ctx)
 
 	//nolint:wrapcheck
 	return v.InParallel(ctx, func(tw *snapshotfs.TreeWalker) error {

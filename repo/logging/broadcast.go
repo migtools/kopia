@@ -9,21 +9,9 @@ import (
 func Broadcast(logger ...Logger) Logger {
 	var cores []zapcore.Core
 
-	var singleName string
-
 	for _, l := range logger {
-		dl := l.Desugar()
-
-		if singleName == "" {
-			singleName = dl.Name()
-		}
-
-		if dl.Name() != singleName {
-			singleName = "-"
-		}
-
-		cores = append(cores, dl.Core())
+		cores = append(cores, l.Desugar().Core())
 	}
 
-	return zap.New(zapcore.NewTee(cores...)).Sugar().Named(singleName)
+	return zap.New(zapcore.NewTee(cores...)).Sugar()
 }

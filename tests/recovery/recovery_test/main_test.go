@@ -13,8 +13,6 @@ import (
 
 const (
 	dataSubPath = "recovery-data"
-	dirPath     = "kopia_dummy_repo"
-	dataPath    = "crash-consistency-data"
 )
 
 var repoPathPrefix = flag.String("repo-path-prefix", "", "Point the robustness tests at this path prefix")

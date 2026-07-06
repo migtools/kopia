@@ -11,10 +11,9 @@ import (
 )
 
 type commandACLAdd struct {
-	user      string
-	target    string
-	level     string
-	overwrite bool
+	user   string
+	target string
+	level  string
 }
 
 func (c *commandACLAdd) setup(svc appServices, parent commandParent) {
@@ -22,7 +21,6 @@ func (c *commandACLAdd) setup(svc appServices, parent commandParent) {
 	cmd.Flag("user", "User the ACL targets").Required().StringVar(&c.user)
 	cmd.Flag("target", "Manifests targeted by the rule (type:T,key1:value1,...,keyN:valueN)").Required().StringVar(&c.target)
 	cmd.Flag("access", "Access the user gets to subject").Required().EnumVar(&c.level, acl.SupportedAccessLevels()...)
-	cmd.Flag("overwrite", "Overwrite existing rule with the same user and target").BoolVar(&c.overwrite)
 	cmd.Action(svc.repositoryWriterAction(c.run))
 }
 
@@ -49,5 +47,5 @@ func (c *commandACLAdd) run(ctx context.Context, rep repo.RepositoryWriter) erro
 		Access: al,
 	}
 
-	return errors.Wrap(acl.AddACL(ctx, rep, e, c.overwrite), "error adding ACL entry")
+	return errors.Wrap(acl.AddACL(ctx, rep, e), "error adding ACL entry")
 }

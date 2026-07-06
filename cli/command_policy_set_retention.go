@@ -48,5 +48,9 @@ func (c *policyRetentionFlags) setRetentionPolicyFromFlags(ctx context.Context, 
 		}
 	}
 
-	return applyPolicyBoolPtr(ctx, "do not save identical snapshots", &rp.IgnoreIdenticalSnapshots, c.policySetIgnoreIdenticalSnapshots, changeCount)
+	if err := applyPolicyBoolPtr(ctx, "do not save identical snapshots", &rp.IgnoreIdenticalSnapshots, c.policySetIgnoreIdenticalSnapshots, changeCount); err != nil {
+		return err
+	}
+
+	return nil
 }

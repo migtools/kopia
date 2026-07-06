@@ -25,7 +25,7 @@ func (sm *SharedManager) Refresh(ctx context.Context) error {
 		return err
 	}
 
-	ibm.Invalidate()
+	ibm.Invalidate(ctx)
 
 	timer := timetrack.StartTimer()
 

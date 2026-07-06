@@ -3,7 +3,7 @@ set -e
 GS_PREFIX=gs://$PACKAGES_HOST/apt
 GPG_KEY_ID=7FB99DFD47809F0D5339D7D92273699AFD56A556
 PKGDIR=$1
-RETAIN_UNSTABLE_DEB_COUNT=3
+RETAIN_UNSTABLE_DEB_COUNT=2
 
 if [ -z "$PACKAGES_HOST" ]; then
   echo Not publishing APT package because PACKAGES_HOST is not set.
@@ -46,7 +46,9 @@ for d in $distributions; do
   mkdir -pv $WORK_DIR/dists/$d
   gsutil -m rsync -r -d $GS_PREFIX/dists/$d $WORK_DIR/dists/$d
   for a in $architectures; do
-    delete_old_deb $WORK_DIR/dists/$d/main/binary-$a || echo Unable to delete old deb
+    if [ "$d" == "unstable" ]; then
+      delete_old_deb $WORK_DIR/dists/$d/main/binary-$a || echo Unable to delete old deb
+    fi
   done
 done
 

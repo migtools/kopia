@@ -29,5 +29,9 @@ func (c *policyUploadFlags) setUploadPolicyFromFlags(ctx context.Context, up *po
 		return err
 	}
 
-	return applyOptionalInt64MiB(ctx, "parallel upload above size", &up.ParallelUploadAboveSize, c.parallelizeUploadAboveSizeMiB, changeCount)
+	if err := applyOptionalInt64MiB(ctx, "parallel upload above size", &up.ParallelUploadAboveSize, c.parallelizeUploadAboveSizeMiB, changeCount); err != nil {
+		return err
+	}
+
+	return nil
 }

@@ -174,8 +174,3 @@ func (b *WriteBuffer) Dup() *WriteBuffer {
 func NewWriteBuffer() *WriteBuffer {
 	return &WriteBuffer{}
 }
-
-// NewWriteBufferMaxContiguous creates new write buffer that will allocate large chunks.
-func NewWriteBufferMaxContiguous() *WriteBuffer {
-	return &WriteBuffer{alloc: maxContiguousAllocator}
-}

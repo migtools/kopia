@@ -51,8 +51,8 @@ func TestRestoreFail(t *testing.T) {
 
 	beforeBlobList := e.RunAndExpectSuccess(t, "blob", "list")
 
-	out, errOut := e.RunAndExpectSuccessWithErrOut(t, "snapshot", "create", sourceDir)
-	parsed := parseSnapshotResultFromLog(t, out, errOut)
+	_, errOut := e.RunAndExpectSuccessWithErrOut(t, "snapshot", "create", sourceDir)
+	parsed := parseSnapshotResult(t, errOut)
 
 	afterBlobList := e.RunAndExpectSuccess(t, "blob", "list")
 
