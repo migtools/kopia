@@ -82,7 +82,7 @@ func (c *commandServerStart) setup(svc advancedAppServices, parent commandParent
 	cmd.Flag("html", "Server the provided HTML at the root URL").ExistingDirVar(&c.serverStartHTMLPath)
 	cmd.Flag("ui", "Start the server with HTML UI").Default("true").BoolVar(&c.serverStartUI)
 
-	cmd.Flag("legacy-api", "Start the legacy server API").Default("true").BoolVar(&c.serverStartLegacyRepositoryAPI)
+	cmd.Flag("legacy-api", "Start the legacy server API").Default("false").BoolVar(&c.serverStartLegacyRepositoryAPI)
 	cmd.Flag("grpc", "Start the GRPC server").Default("true").BoolVar(&c.serverStartGRPC)
 	cmd.Flag("control-api", "Start the control API").Default("true").BoolVar(&c.serverStartControlAPI)
 
@@ -165,7 +165,6 @@ func (c *commandServerStart) serverStartOptions(ctx context.Context) (*server.Op
 
 func (c *commandServerStart) initRepositoryPossiblyAsync(ctx context.Context, srv *server.Server) error {
 	initialize := func(ctx context.Context) (repo.Repository, error) {
-		//nolint:wrapcheck
 		return c.svc.openRepository(ctx, false)
 	}
 
@@ -199,7 +198,7 @@ func (c *commandServerStart) run(ctx context.Context) error {
 	httpServer := &http.Server{
 		ReadHeaderTimeout: 15 * time.Second, //nolint:gomnd
 		Addr:              stripProtocol(c.sf.serverAddress),
-		BaseContext: func(l net.Listener) context.Context {
+		BaseContext: func(_ net.Listener) context.Context {
 			return ctx
 		},
 	}
@@ -208,7 +207,7 @@ func (c *commandServerStart) run(ctx context.Context) error {
 		ctx2, cancel := context.WithTimeout(ctx, c.shutdownGracePeriod)
 		defer cancel()
 
-		// wait for all connections to finish for up to 5 seconds
+		// wait for all connections to finish within a shutdown grace period
 		log(ctx2).Debugf("attempting graceful shutdown for %v", c.shutdownGracePeriod)
 
 		if serr := httpServer.Shutdown(ctx2); serr != nil {
@@ -222,12 +221,8 @@ func (c *commandServerStart) run(ctx context.Context) error {
 		return nil
 	}
 
-	c.svc.onCtrlC(func() {
-		log(ctx).Infof("Shutting down...")
-
-		if serr := httpServer.Shutdown(ctx); serr != nil {
-			log(ctx).Debugf("unable to shut down: %v", serr)
-		}
+	c.svc.onTerminate(func() {
+		shutdownHTTPServer(ctx, httpServer)
 	})
 
 	c.svc.onRepositoryFatalError(func(_ error) {
@@ -253,13 +248,12 @@ func (c *commandServerStart) run(ctx context.Context) error {
 	httpServer.Handler = handler
 
 	if c.serverStartShutdownWhenStdinClosed {
-		log(ctx).Infof("Server will close when stdin is closed...")
+		log(ctx).Info("Server will close when stdin is closed...")
 
 		ctxutil.GoDetached(ctx, func(ctx context.Context) {
 			// consume all stdin and close the server when it closes
-			io.ReadAll(os.Stdin) //nolint:errcheck
-			log(ctx).Infof("Shutting down server...")
-			httpServer.Shutdown(ctx) //nolint:errcheck
+			io.Copy(io.Discard, os.Stdin) //nolint:errcheck
+			shutdownHTTPServer(ctx, httpServer)
 		})
 	}
 
@@ -271,6 +265,14 @@ func (c *commandServerStart) run(ctx context.Context) error {
 	}
 
 	return errors.Wrap(srv.SetRepository(ctx, nil), "error setting active repository")
+}
+
+func shutdownHTTPServer(ctx context.Context, httpServer *http.Server) {
+	log(ctx).Infof("Shutting down HTTP server ...")
+
+	if err := httpServer.Shutdown(ctx); err != nil {
+		log(ctx).Errorln("unable to shut down HTTP server:", err)
+	}
 }
 
 func (c *commandServerStart) setupHandlers(srv *server.Server, m *mux.Router) {

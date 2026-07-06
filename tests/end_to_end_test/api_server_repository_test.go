@@ -53,7 +53,7 @@ func TestAPIServerRepository_GRPC_RepositoryUsers(t *testing.T) {
 func TestAPIServerRepository_DisableGRPC_htpasswd(t *testing.T) {
 	t.Parallel()
 
-	testAPIServerRepository(t, []string{"--no-grpc"}, false, false)
+	testAPIServerRepository(t, []string{"--no-grpc", "--legacy-api"}, false, false)
 }
 
 //nolint:thelper
@@ -361,7 +361,7 @@ func TestFindManifestsPaginationOverGRPC(t *testing.T) {
 
 	// add about 36 MB worth of manifests
 	require.NoError(t, repo.WriteSession(ctx, rep, repo.WriteSessionOptions{}, func(ctx context.Context, w repo.RepositoryWriter) error {
-		for i := 0; i < numManifests; i++ {
+		for range numManifests {
 			uniqueID := strings.Repeat(uuid.NewString(), 100)
 			require.Len(t, uniqueID, 3600)
 
@@ -387,7 +387,7 @@ func TestFindManifestsPaginationOverGRPC(t *testing.T) {
 	})
 
 	require.NoError(t, ferr)
-	require.Equal(t, numManifests, len(manifests))
+	require.Len(t, manifests, numManifests)
 
 	// make sure every manifest is unique and in the uniqueIDs map
 	for _, m := range manifests {

@@ -218,7 +218,7 @@ func TestConsistencyWhenKill9AfterModify(t *testing.T) {
 
 	o, err := cmd.CombinedOutput()
 	require.NoError(t, err)
-	t.Logf("%s", o)
+	t.Logf(string(o))
 
 	// create snapshot with StderrPipe
 	cmd = exec.Command(kopiaExe, "snap", "create", newDir, "--json", "--parallel=1")
@@ -240,7 +240,7 @@ func TestConsistencyWhenKill9AfterModify(t *testing.T) {
 	stdout, err := bm.RestoreGivenOrRandomSnapshot("", restoreDir)
 	require.NoError(t, err)
 
-	t.Logf("%s", stdout)
+	t.Logf(stdout)
 
 	t.Logf("Compare restored data and original data:")
 	CompareDirs(t, restoreDir, cmpDir)
@@ -267,7 +267,7 @@ func killOnCondition(t *testing.T, cmd *exec.Cmd) {
 
 		for scanner.Scan() {
 			output := scanner.Text()
-			t.Logf("%s", output)
+			t.Logf(output)
 
 			// Check if the output contains the "hashing" etc.
 			if strings.Contains(output, "hashing") && strings.Contains(output, "hashed") && strings.Contains(output, "uploaded") {

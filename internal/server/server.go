@@ -103,7 +103,9 @@ type Server struct {
 	// +checklocks:serverMutex
 	sched *scheduler.Scheduler
 
-	// +checklocks:serverMutex
+	nextRefreshTimeLock sync.Mutex
+
+	// +checklocks:nextRefreshTimeLock
 	nextRefreshTime time.Time
 
 	grpcServerState
@@ -239,7 +241,7 @@ func isAuthenticated(rc requestContext) bool {
 }
 
 func (s *Server) isAuthCookieValid(username, cookieValue string) bool {
-	tok, err := jwt.ParseWithClaims(cookieValue, &jwt.RegisteredClaims{}, func(t *jwt.Token) (interface{}, error) {
+	tok, err := jwt.ParseWithClaims(cookieValue, &jwt.RegisteredClaims{}, func(_ *jwt.Token) (interface{}, error) {
 		return s.authCookieSigningKey, nil
 	})
 	if err != nil {
@@ -268,8 +270,8 @@ func (s *Server) generateShortTermAuthCookie(username string, now time.Time) (st
 }
 
 func (s *Server) captureRequestContext(w http.ResponseWriter, r *http.Request) requestContext {
-	s.serverMutex.Lock()
-	defer s.serverMutex.Unlock()
+	s.serverMutex.RLock()
+	defer s.serverMutex.RUnlock()
 
 	return requestContext{
 		w:   w,
@@ -379,6 +381,7 @@ func (s *Server) handleRequestPossiblyNotConnected(isAuthorized isAuthorizedFunc
 			http.Error(rc.w, "error reading request body", http.StatusInternalServerError)
 			return
 		}
+
 		rc.body = body
 
 		if s.options.LogRequests {
@@ -390,8 +393,10 @@ func (s *Server) handleRequestPossiblyNotConnected(isAuthorized isAuthorizedFunc
 		e := json.NewEncoder(rc.w)
 		e.SetIndent("", "  ")
 
-		var v interface{}
-		var err *apiError
+		var (
+			v   any
+			err *apiError
+		)
 
 		// process the request while ignoring the cancellation signal
 		// to ensure all goroutines started by it won't be canceled
@@ -433,9 +438,9 @@ func (s *Server) handleRequestPossiblyNotConnected(isAuthorized isAuthorizedFunc
 
 func (s *Server) refreshAsync() {
 	// prevent refresh from being runnable.
-	s.serverMutex.Lock()
+	s.nextRefreshTimeLock.Lock()
 	s.nextRefreshTime = clock.Now().Add(s.options.RefreshInterval)
-	s.serverMutex.Unlock()
+	s.nextRefreshTimeLock.Unlock()
 
 	go s.Refresh()
 }
@@ -458,7 +463,9 @@ func (s *Server) refreshLocked(ctx context.Context) error {
 		return nil
 	}
 
+	s.nextRefreshTimeLock.Lock()
 	s.nextRefreshTime = clock.Now().Add(s.options.RefreshInterval)
+	s.nextRefreshTimeLock.Unlock()
 
 	if err := s.rep.Refresh(ctx); err != nil {
 		return errors.Wrap(err, "unable to refresh repository")
@@ -575,7 +582,10 @@ func (s *Server) SetRepository(ctx context.Context, rep repo.Repository) error {
 	}
 
 	if s.rep != nil {
-		s.sched.Stop()
+		// stop previous scheduler asynchronously to avoid deadlock when
+		// scheduler is inside s.getSchedulerItems which needs a lock, which we're holding right now.
+		go s.sched.Stop()
+
 		s.sched = nil
 
 		s.unmountAllLocked(ctx)
@@ -800,6 +810,7 @@ func (s *Server) ServeStaticFiles(m *mux.Router, fs http.FileSystem) {
 			}
 
 			http.ServeContent(w, r, "/", clock.Now(), bytes.NewReader(s.patchIndexBytes(sessionID, indexBytes)))
+
 			return
 		}
 
@@ -926,7 +937,6 @@ func RetryInitRepository(initialize InitRepositoryFunc) InitRepositoryFunc {
 			log(ctx).Warnf("unable to open repository: %v, will keep trying until canceled. Sleeping for %v", rerr, nextSleepTime)
 
 			if !clock.SleepInterruptibly(ctx, nextSleepTime) {
-				//nolint:wrapcheck
 				return nil, ctx.Err()
 			}
 
@@ -956,11 +966,9 @@ func (s *Server) runSnapshotTask(ctx context.Context, src snapshot.SourceInfo, i
 
 func (s *Server) runMaintenanceTask(ctx context.Context, dr repo.DirectRepository) error {
 	return errors.Wrap(s.taskmgr.Run(ctx, "Maintenance", "Periodic maintenance", func(ctx context.Context, _ uitask.Controller) error {
-		//nolint:wrapcheck
 		return repo.DirectWriteSession(ctx, dr, repo.WriteSessionOptions{
 			Purpose: "periodicMaintenance",
 		}, func(ctx context.Context, w repo.DirectRepositoryWriter) error {
-			//nolint:wrapcheck
 			return snapshotmaintenance.Run(ctx, w, maintenance.ModeAuto, false, maintenance.SafetyFull)
 		})
 	}), "unable to run maintenance")
@@ -1021,11 +1029,15 @@ func (s *Server) getSchedulerItems(ctx context.Context, now time.Time) []schedul
 
 	var result []scheduler.Item
 
+	s.nextRefreshTimeLock.Lock()
+	nrt := s.nextRefreshTime
+	s.nextRefreshTimeLock.Unlock()
+
 	// add a scheduled item to refresh all sources and policies
 	result = append(result, scheduler.Item{
 		Description: "refresh",
 		Trigger:     s.refreshAsync,
-		NextTime:    s.nextRefreshTime,
+		NextTime:    nrt,
 	})
 
 	if s.maint != nil {

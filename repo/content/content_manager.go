@@ -121,7 +121,7 @@ func (bm *WriteManager) Revision() int64 {
 // of randomness or a contemporaneous timestamp that will never reappear.
 func (bm *WriteManager) DeleteContent(ctx context.Context, contentID ID) error {
 	bm.lock()
-	defer bm.unlock()
+	defer bm.unlock(ctx)
 
 	bm.revision.Add(1)
 
@@ -129,7 +129,7 @@ func (bm *WriteManager) DeleteContent(ctx context.Context, contentID ID) error {
 
 	// remove from all pending packs
 	for _, pp := range bm.pendingPacks {
-		if bi, ok := pp.currentPackItems[contentID]; ok && !bi.GetDeleted() {
+		if bi, ok := pp.currentPackItems[contentID]; ok && !bi.Deleted {
 			delete(pp.currentPackItems, contentID)
 			return nil
 		}
@@ -137,7 +137,7 @@ func (bm *WriteManager) DeleteContent(ctx context.Context, contentID ID) error {
 
 	// remove from all packs that are being written, since they will be committed to index soon
 	for _, pp := range bm.writingPacks {
-		if bi, ok := pp.currentPackItems[contentID]; ok && !bi.GetDeleted() {
+		if bi, ok := pp.currentPackItems[contentID]; ok && !bi.Deleted {
 			return bm.deletePreexistingContent(ctx, bi)
 		}
 	}
@@ -177,18 +177,26 @@ func (bm *WriteManager) maybeRefreshIndexes(ctx context.Context) error {
 // Intentionally passing bi by value.
 // +checklocks:bm.mu
 func (bm *WriteManager) deletePreexistingContent(ctx context.Context, ci Info) error {
-	if ci.GetDeleted() {
+	if ci.Deleted {
 		return nil
 	}
 
-	pp, err := bm.getOrCreatePendingPackInfoLocked(ctx, packPrefixForContentID(ci.GetContentID()))
+	pp, err := bm.getOrCreatePendingPackInfoLocked(ctx, packPrefixForContentID(ci.ContentID))
 	if err != nil {
 		return errors.Wrap(err, "unable to create pack")
 	}
 
-	pp.currentPackItems[ci.GetContentID()] = &deletedInfo{ci, bm.contentWriteTime(ci.GetTimestampSeconds())}
+	pp.currentPackItems[ci.ContentID] = deletedInfo(ci, bm.contentWriteTime(ci.TimestampSeconds))
 
 	return nil
+}
+
+func deletedInfo(is Info, deletedTime int64) Info {
+	// clone and set deleted time
+	is.Deleted = true
+	is.TimestampSeconds = deletedTime
+
+	return is
 }
 
 // contentWriteTime returns content write time for new content
@@ -202,23 +210,10 @@ func (bm *WriteManager) contentWriteTime(previousUnixTimeSeconds int64) int64 {
 	return previousUnixTimeSeconds + 1
 }
 
-type deletedInfo struct {
-	Info
-	deletedTime int64
-}
-
-func (d *deletedInfo) GetDeleted() bool {
-	return true
-}
-
-func (d *deletedInfo) GetTimestampSeconds() int64 {
-	return d.deletedTime
-}
-
 func (bm *WriteManager) maybeFlushBasedOnTimeUnlocked(ctx context.Context) error {
 	bm.lock()
 	shouldFlush := bm.timeNow().After(bm.flushPackIndexesAfter)
-	bm.unlock()
+	bm.unlock(ctx)
 
 	if !shouldFlush {
 		return nil
@@ -229,7 +224,7 @@ func (bm *WriteManager) maybeFlushBasedOnTimeUnlocked(ctx context.Context) error
 
 func (bm *WriteManager) maybeRetryWritingFailedPacksUnlocked(ctx context.Context) error {
 	bm.lock()
-	defer bm.unlock()
+	defer bm.unlock(ctx)
 
 	// do not start new uploads while flushing
 	for bm.flushing {
@@ -276,7 +271,7 @@ func (bm *WriteManager) addToPackUnlocked(ctx context.Context, contentID ID, dat
 	if previousWriteTime < 0 {
 		if _, _, err = bm.getContentInfoReadLocked(ctx, contentID); err == nil {
 			// we lost the race while compressing the content, the content now exists.
-			bm.unlock()
+			bm.unlock(ctx)
 			return nil
 		}
 	}
@@ -299,18 +294,18 @@ func (bm *WriteManager) addToPackUnlocked(ctx context.Context, contentID ID, dat
 		bm.log.Debugf("retry-write %v", pp.packBlobID)
 
 		if err = bm.writePackAndAddToIndexLocked(ctx, pp); err != nil {
-			bm.unlock()
+			bm.unlock(ctx)
 			return errors.Wrap(err, "error writing previously failed pack")
 		}
 	}
 
 	pp, err := bm.getOrCreatePendingPackInfoLocked(ctx, prefix)
 	if err != nil {
-		bm.unlock()
+		bm.unlock(ctx)
 		return errors.Wrap(err, "unable to create pending pack")
 	}
 
-	info := &InfoStruct{
+	info := Info{
 		Deleted:          isDeleted,
 		ContentID:        contentID,
 		PackBlobID:       pp.packBlobID,
@@ -321,7 +316,7 @@ func (bm *WriteManager) addToPackUnlocked(ctx context.Context, contentID ID, dat
 	}
 
 	if _, err := compressedAndEncrypted.Bytes().WriteTo(pp.currentPackData); err != nil {
-		bm.unlock()
+		bm.unlock(ctx)
 		return errors.Wrapf(err, "unable to append %q to pack data", contentID)
 	}
 
@@ -338,7 +333,7 @@ func (bm *WriteManager) addToPackUnlocked(ctx context.Context, contentID ID, dat
 		bm.writingPacks = append(bm.writingPacks, pp)
 	}
 
-	bm.unlock()
+	bm.unlock(ctx)
 
 	// at this point we're unlocked so different goroutines can encrypt and
 	// save to storage in parallel.
@@ -354,8 +349,10 @@ func (bm *WriteManager) addToPackUnlocked(ctx context.Context, contentID ID, dat
 // DisableIndexFlush increments the counter preventing automatic index flushes.
 func (bm *WriteManager) DisableIndexFlush(ctx context.Context) {
 	bm.lock()
-	defer bm.unlock()
+	defer bm.unlock(ctx)
+
 	bm.log.Debugf("DisableIndexFlush()")
+
 	bm.disableIndexFlushCount++
 }
 
@@ -363,8 +360,10 @@ func (bm *WriteManager) DisableIndexFlush(ctx context.Context) {
 // The flushes will be re-enabled when the index drops to zero.
 func (bm *WriteManager) EnableIndexFlush(ctx context.Context) {
 	bm.lock()
-	defer bm.unlock()
+	defer bm.unlock(ctx)
+
 	bm.log.Debugf("EnableIndexFlush()")
+
 	bm.disableIndexFlushCount--
 }
 
@@ -378,13 +377,13 @@ func (bm *WriteManager) verifyInvariantsLocked(mp format.MutableParameters) {
 func (bm *WriteManager) verifyCurrentPackItemsLocked() {
 	for _, pp := range bm.pendingPacks {
 		for k, cpi := range pp.currentPackItems {
-			bm.assertInvariant(cpi.GetContentID() == k, "content ID entry has invalid key: %v %v", cpi.GetContentID(), k)
+			bm.assertInvariant(cpi.ContentID == k, "content ID entry has invalid key: %v %v", cpi.ContentID, k)
 
-			if !cpi.GetDeleted() {
-				bm.assertInvariant(cpi.GetPackBlobID() == pp.packBlobID, "non-deleted pending pack item %q must be from the pending pack %q, was %q", cpi.GetContentID(), pp.packBlobID, cpi.GetPackBlobID())
+			if !cpi.Deleted {
+				bm.assertInvariant(cpi.PackBlobID == pp.packBlobID, "non-deleted pending pack item %q must be from the pending pack %q, was %q", cpi.ContentID, pp.packBlobID, cpi.PackBlobID)
 			}
 
-			bm.assertInvariant(cpi.GetTimestampSeconds() != 0, "content has no timestamp: %v", cpi.GetContentID())
+			bm.assertInvariant(cpi.TimestampSeconds != 0, "content has no timestamp: %v", cpi.ContentID)
 		}
 	}
 }
@@ -392,16 +391,16 @@ func (bm *WriteManager) verifyCurrentPackItemsLocked() {
 // +checklocks:bm.mu
 func (bm *WriteManager) verifyPackIndexBuilderLocked(mp format.MutableParameters) {
 	for k, cpi := range bm.packIndexBuilder {
-		bm.assertInvariant(cpi.GetContentID() == k, "content ID entry has invalid key: %v %v", cpi.GetContentID(), k)
+		bm.assertInvariant(cpi.ContentID == k, "content ID entry has invalid key: %v %v", cpi.ContentID, k)
 
-		if cpi.GetDeleted() {
-			bm.assertInvariant(cpi.GetPackBlobID() == "", "content can't be both deleted and have a pack content: %v", cpi.GetContentID())
+		if cpi.Deleted {
+			bm.assertInvariant(cpi.PackBlobID == "", "content can't be both deleted and have a pack content: %v", cpi.ContentID)
 		} else {
-			bm.assertInvariant(cpi.GetPackBlobID() != "", "content that's not deleted must have a pack content: %+v", cpi)
-			bm.assertInvariant(cpi.GetFormatVersion() == byte(mp.Version), "content that's not deleted must have a valid format version: %+v", cpi)
+			bm.assertInvariant(cpi.PackBlobID != "", "content that's not deleted must have a pack content: %+v", cpi)
+			bm.assertInvariant(cpi.FormatVersion == byte(mp.Version), "content that's not deleted must have a valid format version: %+v", cpi)
 		}
 
-		bm.assertInvariant(cpi.GetTimestampSeconds() != 0, "content has no timestamp: %v", cpi.GetContentID())
+		bm.assertInvariant(cpi.TimestampSeconds != 0, "content has no timestamp: %v", cpi.ContentID)
 	}
 }
 
@@ -422,7 +421,7 @@ func (bm *WriteManager) writeIndexBlobs(ctx context.Context, dataShards []gather
 	ctx, span := tracer.Start(ctx, "WriteIndexBlobs")
 	defer span.End()
 
-	ibm, err := bm.indexBlobManager()
+	ibm, err := bm.indexBlobManager(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -514,7 +513,7 @@ func (bm *WriteManager) writePackAndAddToIndexUnlocked(ctx context.Context, pp *
 	packFileIndex, writeErr := bm.prepareAndWritePackInternal(ctx, pp, bm.onUpload)
 
 	bm.lock()
-	defer bm.unlock()
+	defer bm.unlock(ctx)
 
 	return bm.processWritePackResultLocked(pp, packFileIndex, writeErr)
 }
@@ -552,7 +551,12 @@ func (bm *WriteManager) processWritePackResultLocked(pp *pendingPackInfo, packFi
 }
 
 func (sm *SharedManager) prepareAndWritePackInternal(ctx context.Context, pp *pendingPackInfo, onUpload func(int64)) (index.Builder, error) {
-	packFileIndex, err := sm.preparePackDataContent(pp)
+	mp, mperr := sm.format.GetMutableParameters(ctx)
+	if mperr != nil {
+		return nil, errors.Wrap(mperr, "mutable parameters")
+	}
+
+	packFileIndex, err := sm.preparePackDataContent(mp, pp)
 	if err != nil {
 		return nil, errors.Wrap(err, "error preparing data content")
 	}
@@ -595,13 +599,13 @@ func (bm *WriteManager) setFlushingLocked(v bool) {
 // Any pending writes completed before Flush() has started are guaranteed to be committed to the
 // repository before Flush() returns.
 func (bm *WriteManager) Flush(ctx context.Context) error {
-	mp, mperr := bm.format.GetMutableParameters()
+	mp, mperr := bm.format.GetMutableParameters(ctx)
 	if mperr != nil {
 		return errors.Wrap(mperr, "mutable parameters")
 	}
 
 	bm.lock()
-	defer bm.unlock()
+	defer bm.unlock(ctx)
 
 	bm.log.Debugf("flush")
 
@@ -650,7 +654,7 @@ func (bm *WriteManager) Flush(ctx context.Context) error {
 func (bm *WriteManager) RewriteContent(ctx context.Context, contentID ID) error {
 	bm.log.Debugf("rewrite-content %v", contentID)
 
-	mp, mperr := bm.format.GetMutableParameters()
+	mp, mperr := bm.format.GetMutableParameters(ctx)
 	if mperr != nil {
 		return errors.Wrap(mperr, "mutable parameters")
 	}
@@ -665,11 +669,11 @@ func (bm *WriteManager) getContentDataAndInfo(ctx context.Context, contentID ID,
 
 	pp, bi, err := bm.getContentInfoReadLocked(ctx, contentID)
 	if err != nil {
-		return nil, err
+		return Info{}, err
 	}
 
 	if err := bm.getContentDataReadLocked(ctx, pp, bi, output); err != nil {
-		return nil, err
+		return Info{}, err
 	}
 
 	return bi, nil
@@ -681,7 +685,7 @@ func (bm *WriteManager) getContentDataAndInfo(ctx context.Context, contentID ID,
 func (bm *WriteManager) UndeleteContent(ctx context.Context, contentID ID) error {
 	bm.log.Debugf("UndeleteContent(%q)", contentID)
 
-	mp, mperr := bm.format.GetMutableParameters()
+	mp, mperr := bm.format.GetMutableParameters(ctx)
 	if mperr != nil {
 		return errors.Wrap(mperr, "mutable parameters")
 	}
@@ -704,7 +708,7 @@ func (bm *WriteManager) rewriteContent(ctx context.Context, contentID ID, onlyRe
 		return errors.Wrap(err, "unable to get content data and info")
 	}
 
-	isDeleted := bi.GetDeleted()
+	isDeleted := bi.Deleted
 
 	if onlyRewriteDeleted {
 		if !isDeleted {
@@ -714,7 +718,7 @@ func (bm *WriteManager) rewriteContent(ctx context.Context, contentID ID, onlyRe
 		isDeleted = false
 	}
 
-	return bm.addToPackUnlocked(ctx, contentID, data.Bytes(), isDeleted, bi.GetCompressionHeaderID(), bi.GetTimestampSeconds(), mp)
+	return bm.addToPackUnlocked(ctx, contentID, data.Bytes(), isDeleted, bi.CompressionHeaderID, bi.TimestampSeconds, mp)
 }
 
 func packPrefixForContentID(contentID ID) blob.ID {
@@ -745,7 +749,7 @@ func (bm *WriteManager) getOrCreatePendingPackInfoLocked(ctx context.Context, pr
 		return nil, errors.Wrap(err, "unable to read crypto bytes")
 	}
 
-	suffix, berr := bm.format.RepositoryFormatBytes()
+	suffix, berr := bm.format.RepositoryFormatBytes(ctx)
 	if berr != nil {
 		return nil, errors.Wrap(berr, "format bytes")
 	}
@@ -768,13 +772,10 @@ func (bm *WriteManager) getOrCreatePendingPackInfoLocked(ctx context.Context, pr
 }
 
 // SupportsContentCompression returns true if content manager supports content-compression.
-func (bm *WriteManager) SupportsContentCompression() (bool, error) {
-	mp, mperr := bm.format.GetMutableParameters()
-	if mperr != nil {
-		return false, errors.Wrap(mperr, "mutable parameters")
-	}
+func (bm *WriteManager) SupportsContentCompression() bool {
+	mp := bm.format.GetCachedMutableParameters()
 
-	return mp.IndexVersion >= index.Version2, nil
+	return mp.IndexVersion >= index.Version2
 }
 
 // WriteContent saves a given content of data to a pack group with a provided name and returns a contentID
@@ -785,7 +786,7 @@ func (bm *WriteManager) WriteContent(ctx context.Context, data gather.Bytes, pre
 		bm.writeContentBytes.Observe(int64(data.Length()), t0.Elapsed())
 	}()
 
-	mp, mperr := bm.format.GetMutableParameters()
+	mp, mperr := bm.format.GetMutableParameters(ctx)
 	if mperr != nil {
 		return EmptyID, errors.Wrap(mperr, "mutable parameters")
 	}
@@ -819,14 +820,14 @@ func (bm *WriteManager) WriteContent(ctx context.Context, data gather.Bytes, pre
 
 	// content already tracked
 	if err == nil {
-		if !bi.GetDeleted() {
+		if !bi.Deleted {
 			bm.deduplicatedContents.Add(1)
 			bm.deduplicatedBytes.Add(int64(data.Length()))
 
 			return contentID, nil
 		}
 
-		previousWriteTime = bi.GetTimestampSeconds()
+		previousWriteTime = bi.TimestampSeconds
 
 		logbuf.AppendString(" previously-deleted:")
 		logbuf.AppendInt64(previousWriteTime)
@@ -885,7 +886,7 @@ func (bm *WriteManager) getOverlayContentInfoReadLocked(contentID ID) (*pendingP
 		return nil, ci, true
 	}
 
-	return nil, nil, false
+	return nil, Info{}, false
 }
 
 // +checklocksread:bm.mu
@@ -896,7 +897,7 @@ func (bm *WriteManager) getContentInfoReadLocked(ctx context.Context, contentID 
 
 	// see if the content existed before
 	if err := bm.maybeRefreshIndexes(ctx); err != nil {
-		return nil, nil, err
+		return nil, Info{}, err
 	}
 
 	info, err := bm.committedContents.getContent(contentID)
@@ -912,7 +913,7 @@ func (bm *WriteManager) ContentInfo(ctx context.Context, contentID ID) (Info, er
 	_, bi, err := bm.getContentInfoReadLocked(ctx, contentID)
 	if err != nil {
 		bm.log.Debugf("ContentInfo(%q) - error %v", contentID, err)
-		return nil, err
+		return Info{}, err
 	}
 
 	return bi, err
@@ -929,9 +930,9 @@ func (bm *WriteManager) lock() {
 }
 
 // +checklocksrelease:bm.mu
-func (bm *WriteManager) unlock() {
+func (bm *WriteManager) unlock(ctx context.Context) {
 	if bm.checkInvariantsOnUnlock {
-		mp, mperr := bm.format.GetMutableParameters()
+		mp, mperr := bm.format.GetMutableParameters(ctx)
 		if mperr == nil {
 			bm.verifyInvariantsLocked(mp)
 		}
@@ -949,9 +950,8 @@ func (bm *WriteManager) MetadataCache() cache.ContentCache {
 type ManagerOptions struct {
 	TimeNow                func() time.Time // Time provider
 	DisableInternalLog     bool
-	RetentionMode          string
-	RetentionPeriod        time.Duration
 	PermissiveCacheLoading bool
+	AllowWriteOnIndexLoad  bool
 }
 
 // CloneOrDefault returns a clone of provided ManagerOptions or default empty struct if nil.
@@ -972,7 +972,7 @@ func NewManagerForTesting(ctx context.Context, st blob.Storage, f format.Provide
 		options.TimeNow = clock.Now
 	}
 
-	sharedManager, err := NewSharedManager(ctx, st, f, caching, options, nil)
+	sharedManager, err := NewSharedManager(ctx, st, f, caching, options, nil, nil)
 	if err != nil {
 		return nil, errors.Wrap(err, "error initializing read manager")
 	}
