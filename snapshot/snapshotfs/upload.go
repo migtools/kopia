@@ -3,6 +3,7 @@ package snapshotfs
 import (
 	"bytes"
 	"context"
+	stderrors "errors"
 	"io"
 	"math/rand"
 	"os"
@@ -18,7 +19,6 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
-	"go.uber.org/multierr"
 
 	"github.com/kopia/kopia/fs"
 	"github.com/kopia/kopia/fs/ignorefs"
@@ -178,11 +178,10 @@ func (u *Uploader) uploadFileInternal(ctx context.Context, parentCheckpointRegis
 	var wg workshare.AsyncGroup[*uploadWorkItem]
 	defer wg.Close()
 
-	for i := 0; i < len(parts); i++ {
-		i := i
+	for i := range parts {
 		offset := int64(i) * chunkSize
 
-		length := chunkSize
+		length := chunkSize //nolint:copyloopvar
 		if i == len(parts)-1 {
 			// last part has unknown length to accommodate the file that may be growing as we're snapshotting it
 			length = -1
@@ -190,7 +189,7 @@ func (u *Uploader) uploadFileInternal(ctx context.Context, parentCheckpointRegis
 
 		if wg.CanShareWork(u.workerPool) {
 			// another goroutine is available, delegate to them
-			wg.RunAsync(u.workerPool, func(c *workshare.Pool[*uploadWorkItem], request *uploadWorkItem) {
+			wg.RunAsync(u.workerPool, func(_ *workshare.Pool[*uploadWorkItem], _ *uploadWorkItem) {
 				parts[i], partErrors[i] = u.uploadFileData(ctx, parentCheckpointRegistry, f, uuid.NewString(), offset, length, comp)
 			}, nil)
 		} else {
@@ -202,7 +201,7 @@ func (u *Uploader) uploadFileInternal(ctx context.Context, parentCheckpointRegis
 	wg.Wait()
 
 	// see if we got any errors
-	if err := multierr.Combine(partErrors...); err != nil {
+	if err := stderrors.Join(partErrors...); err != nil {
 		return nil, errors.Wrap(err, "error uploading parts")
 	}
 
@@ -249,7 +248,6 @@ func (u *Uploader) uploadFileData(ctx context.Context, parentCheckpointRegistry 
 	defer writer.Close() //nolint:errcheck
 
 	parentCheckpointRegistry.addCheckpointCallback(fname, func() (*snapshot.DirEntry, error) {
-		//nolint:govet
 		checkpointID, err := writer.Checkpoint()
 		if err != nil {
 			return nil, errors.Wrap(err, "checkpoint error")
@@ -342,13 +340,12 @@ func (u *Uploader) uploadStreamingFileInternal(ctx context.Context, relativePath
 		return nil, errors.Wrap(err, "unable to get streaming file reader")
 	}
 
-	defer reader.Close() //nolint:errcheck
-
 	var streamSize int64
 
 	u.Progress.HashingFile(relativePath)
 
 	defer func() {
+		reader.Close() //nolint:errcheck
 		u.Progress.FinishedHashingFile(relativePath, streamSize)
 		u.Progress.FinishedFile(relativePath, ret)
 	}()
@@ -599,11 +596,33 @@ func (u *Uploader) uploadDirWithCheckpointing(ctx context.Context, rootDir fs.Di
 		return nil, dirReadError{errors.Wrap(err, "error executing before-snapshot-root action")}
 	}
 
+	defer u.executeAfterFolderAction(ctx, "after-snapshot-root", policyTree.EffectivePolicy().Actions.AfterSnapshotRoot, localDirPathOrEmpty, &hc)
+
+	p := &policyTree.EffectivePolicy().OSSnapshotPolicy
+
+	switch mode := osSnapshotMode(p); mode {
+	case policy.OSSnapshotNever:
+	case policy.OSSnapshotAlways, policy.OSSnapshotWhenAvailable:
+		if overrideDir != nil {
+			rootDir = overrideDir
+		}
+
+		switch osSnapshotDir, cleanup, err := createOSSnapshot(ctx, rootDir, p); {
+		case err == nil:
+			defer cleanup()
+
+			overrideDir = osSnapshotDir
+
+		case mode == policy.OSSnapshotWhenAvailable:
+			uploadLog(ctx).Warnf("OS file system snapshot failed (ignoring): %v", err)
+		default:
+			return nil, dirReadError{errors.Wrap(err, "error creating OS file system snapshot")}
+		}
+	}
+
 	if overrideDir != nil {
 		rootDir = u.wrapIgnorefs(uploadLog(ctx), overrideDir, policyTree, true)
 	}
-
-	defer u.executeAfterFolderAction(ctx, "after-snapshot-root", policyTree.EffectivePolicy().Actions.AfterSnapshotRoot, localDirPathOrEmpty, &hc)
 
 	return uploadDirInternal(ctx, u, rootDir, policyTree, previousDirs, localDirPathOrEmpty, ".", &dmb, &cp)
 }
@@ -769,45 +788,42 @@ func (u *Uploader) processDirectoryEntries(
 	prevDirs []fs.Directory,
 	wg *workshare.AsyncGroup[*uploadWorkItem],
 ) error {
-	// processEntryError distinguishes an error thrown when attempting to read a directory.
-	type processEntryError struct {
-		error
+	iter, err := dir.Iterate(ctx)
+	if err != nil {
+		return dirReadError{err}
 	}
 
-	err := dir.IterateEntries(ctx, func(ctx context.Context, entry fs.Entry) error {
+	defer iter.Close()
+
+	entry, err := iter.Next(ctx)
+
+	for entry != nil {
+		entry2 := entry
+
 		if u.IsCanceled() {
 			return errCanceled
 		}
 
-		entryRelativePath := path.Join(dirRelativePath, entry.Name())
+		entryRelativePath := path.Join(dirRelativePath, entry2.Name())
 
 		if wg.CanShareWork(u.workerPool) {
-			wg.RunAsync(u.workerPool, func(c *workshare.Pool[*uploadWorkItem], wi *uploadWorkItem) {
-				wi.err = u.processSingle(ctx, entry, entryRelativePath, parentDirBuilder, policyTree, prevDirs, localDirPathOrEmpty, parentCheckpointRegistry)
+			wg.RunAsync(u.workerPool, func(_ *workshare.Pool[*uploadWorkItem], wi *uploadWorkItem) {
+				wi.err = u.processSingle(ctx, entry2, entryRelativePath, parentDirBuilder, policyTree, prevDirs, localDirPathOrEmpty, parentCheckpointRegistry)
 			}, &uploadWorkItem{})
 		} else {
-			if err := u.processSingle(ctx, entry, entryRelativePath, parentDirBuilder, policyTree, prevDirs, localDirPathOrEmpty, parentCheckpointRegistry); err != nil {
-				return processEntryError{err}
+			if err2 := u.processSingle(ctx, entry2, entryRelativePath, parentDirBuilder, policyTree, prevDirs, localDirPathOrEmpty, parentCheckpointRegistry); err2 != nil {
+				return err2
 			}
 		}
 
-		return nil
-	})
-
-	if err == nil {
-		return nil
+		entry, err = iter.Next(ctx)
 	}
 
-	var peError processEntryError
-	if errors.As(err, &peError) {
-		return peError.error
+	if err != nil {
+		return dirReadError{err}
 	}
 
-	if errors.Is(err, errCanceled) {
-		return errCanceled
-	}
-
-	return dirReadError{err}
+	return nil
 }
 
 //nolint:funlen
@@ -1136,6 +1152,7 @@ func uploadDirInternal(
 		}
 
 		checkpointManifest := thisCheckpointBuilder.Build(fs.UTCTimestampFromTime(directory.ModTime()), IncompleteReasonCheckpoint)
+
 		oid, err := writeDirManifest(ctx, u.repo, dirRelativePath, checkpointManifest)
 		if err != nil {
 			return nil, errors.Wrap(err, "error writing dir manifest")
