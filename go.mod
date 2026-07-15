@@ -4,10 +4,10 @@ go 1.25.0
 
 require (
 	cloud.google.com/go/storage v1.56.0
-	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.7.1
-	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.3.1
-	github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.1.0
-	github.com/alecthomas/kingpin/v2 v2.3.2
+	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.11.1
+	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.5.2
+	github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.3.2
+	github.com/alecthomas/kingpin/v2 v2.4.0
 	github.com/alecthomas/units v0.0.0-20211218093645-b94a6e3cc137
 	github.com/chmduquesne/rollinghash v4.0.0+incompatible
 	github.com/chromedp/cdproto v0.0.0-20240202021202-6d0b6a386732
@@ -19,11 +19,11 @@ require (
 	github.com/foomo/htpasswd v0.0.0-20200116085101-e3a90e78da9c
 	github.com/gofrs/flock v0.8.1
 	github.com/golang-jwt/jwt/v4 v4.5.2
-	github.com/google/fswalker v0.3.2
+	github.com/google/fswalker v0.3.3
 	github.com/google/go-cmp v0.7.0
 	github.com/google/uuid v1.6.0
-	github.com/gorilla/mux v1.8.0
-	github.com/hanwen/go-fuse/v2 v2.4.0
+	github.com/gorilla/mux v1.8.1
+	github.com/hanwen/go-fuse/v2 v2.5.1
 	github.com/hashicorp/cronexpr v1.1.2
 	github.com/klauspost/compress v1.17.8
 	github.com/klauspost/pgzip v1.2.6
@@ -38,9 +38,9 @@ require (
 	github.com/pkg/errors v0.9.1
 	github.com/pkg/profile v1.7.0
 	github.com/pkg/sftp v1.13.6
-	github.com/prometheus/client_golang v1.16.0
+	github.com/prometheus/client_golang v1.19.0
 	github.com/prometheus/client_model v0.6.2
-	github.com/prometheus/common v0.44.0
+	github.com/prometheus/common v0.52.3
 	github.com/sanity-io/litter v1.5.5
 	github.com/skratchdot/open-golang v0.0.0-20200116055534-eef842397966
 	github.com/stretchr/testify v1.11.1
@@ -52,7 +52,7 @@ require (
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.43.0
 	go.opentelemetry.io/otel/sdk v1.43.0
 	go.opentelemetry.io/otel/trace v1.43.0
-	go.uber.org/zap v1.25.0
+	go.uber.org/zap v1.27.0
 	golang.org/x/crypto v0.52.0
 	golang.org/x/exp v0.0.0-20230522175609-2e198f4a06a1
 	golang.org/x/mod v0.35.0
@@ -76,8 +76,8 @@ require (
 	cloud.google.com/go/compute/metadata v0.9.0 // indirect
 	cloud.google.com/go/iam v1.5.3 // indirect
 	cloud.google.com/go/monitoring v1.24.3 // indirect
-	github.com/Azure/azure-sdk-for-go/sdk/internal v1.3.0 // indirect
-	github.com/AzureAD/microsoft-authentication-library-for-go v1.1.1 // indirect
+	github.com/Azure/azure-sdk-for-go/sdk/internal v1.5.2 // indirect
+	github.com/AzureAD/microsoft-authentication-library-for-go v1.2.2 // indirect
 	github.com/GehirnInc/crypt v0.0.0-20230320061759-8cc1b52080c5 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/detectors/gcp v1.31.0 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/exporter/metric v0.53.0 // indirect
@@ -124,7 +124,7 @@ require (
 	github.com/minio/sha256-simd v1.0.1 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
-	github.com/pkg/browser v0.0.0-20210911075715-681adbf594b8 // indirect
+	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c // indirect
 	github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/pquerna/ffjson v0.0.0-20190930134022-aa0246cd15f7 // indirect
