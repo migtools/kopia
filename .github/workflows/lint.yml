@@ -35,3 +35,5 @@ jobs:
         go-version-file: 'go.mod'
     - name: Lint
       run: make lint
+    - name: Check Locks
+      run: make check-locks
