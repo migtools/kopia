@@ -190,6 +190,11 @@ linters:
       - path: repo/blob/azure/patch\.go
         linters:
           - revive
+      # OADP: internal/crypto and internal/hmac intentionally mirror upstream kopia
+      # package names; renaming them would cause unnecessary rebase churn
+      - text: "avoid package names that conflict with Go standard library package names"
+        linters:
+          - revive
       - path: reporter.go
         linters:
           - musttag
