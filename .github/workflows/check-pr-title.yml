@@ -5,6 +5,7 @@ on:
 jobs:
   check:
     name: Check PR Title
+    if: github.actor != 'oadp-rebasebot'
     runs-on: ubuntu-latest
     steps:
     - uses: deepakputhraya/action-pr-title@master
